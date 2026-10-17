@@ -6,6 +6,7 @@
   "scripts": {
     "render:local": "tsx scripts/render-local.ts",
     "studio": "remotion studio remotion/index.ts",
+    "test": "node --import tsx --test scripts/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "remotion": "^4.0.536",
+    "sharp": "^0.35.5",
     "zod": "^4.6.7"
   },
   "devDependencies": {
