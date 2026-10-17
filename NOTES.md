@@ -11,7 +11,7 @@ until/unless that template gets built.
   `remotion/templates/scenes/`. Auto-fit text via `@remotion/layout-utils` in
   `components/AutoFitText.tsx` — shrinks font size so a line never overflows its width;
   stress-tested with a 60-char product name and 80-char points in `scripts/render-local.ts`.
-- `src/` — server (Express routes, x402, image handling, store/queue) — not built yet,
+- `src/` — server: `app.ts` routes, `x402.ts` + `validate-paid.ts` payment, `render.ts`, `image.ts`, `store.ts`, `queue.ts`,
   Tanta's track (see Linear MON-36 onward).
 - `scripts/render-local.ts` — renders a sample + a stress-test drop to `data/media/`
   without the server or payment, for checking the template in isolation. Run with
@@ -86,6 +86,87 @@ Choices beyond the issue text, all on the strict side:
 waiting behind the running ones; the 6th is refused. `renderQueue.isFull()` is for the
 pre-payment check; `run()` re-checks because two requests can race for the last slot.
 
+## Server routes (`src/app.ts`, MON-36)
+`createApp(deps)` holds every route; `src/server.ts` only reads env, runs `ensureBrowser()` +
+the Remotion bundle once, then listens. Choices to check against spec §6 (not in the repo):
+- **`POST /drop` is synchronous**: the 200 is sent only after the render finishes (~25s
+  locally for 10s of video). That keeps "render failure → no settlement" simple, but PayBox's
+  fetch timeout must allow for it, plus queue wait when busy. Unknown so far.
+- **Response**: `{id, video_url, poster_url, page_url, caption, hashtags}`. Errors are
+  `{error: <code>, message}` (+ `issues` on 400). Status codes: 400 schema/bad JSON/
+  `photo_invalid_url`; 413 body > 16kb; 422 other `photo_*` codes; 503 + `Retry-After: 60`
+  when the queue is full; 500 `render_failed`.
+- `photo_url` must be https (the plugin schema accepts any URL).
+- The processed photo is saved as `media/<id>-photo.{jpg,png}`, and the renderer loads it
+  from `http://127.0.0.1:$PORT/media/...` instead of `PUBLIC_BASE_URL`, so renders don't
+  depend on the public proxy being reachable from inside the container.
+- `GET /templates` lists `market` with `available: false` (renders as brutal).
+- Found in smoke testing: if Chrome Headless Shell isn't present, Remotion downloads it on
+  the first render, and a failed download crashes the whole process (an uncaught rejection).
+  Hence `ensureBrowser()` at startup. **MON-42: download the browser at image build time**
+  (`npx remotion browser ensure`) so a container never downloads it at runtime.
+
+## x402 (`src/x402.ts`, `src/validate-paid.ts`, MON-39/40/43)
+**Settlement finding (spec §6.3 rule 3), from reading `@x402/express` 2.28.0 source:** no
+restructuring needed. For the `exact` EVM scheme the payment flow is "authorization": verify
+*before* the handler, settle *after*. The middleware buffers everything the handler writes;
+if the final status is >= 400, or the handler throws, it cancels settlement and sends the
+error response unchanged. Only a < 400 response triggers `/settle`, and the buffered body is
+released only after settlement succeeds (a failed settle becomes a 402 and the video URLs are
+never sent). That holds because `/drop` renders inside the request (see the synchronous note
+above). Making `/drop` async would break it, so don't.
+
+Middleware order on `/drop`: `express.json` → `validatePaid` → busy check (503) → x402 →
+handler.
+1. No body (or `{}`) → `validatePaid` passes it through → x402 answers 402. A paid request
+   that somehow arrives bodyless gets a 400 from the handler, so it isn't settled.
+2. A body that fails the schema → 400 from `validatePaid`, before x402 runs at all (no
+   `/verify`, no `/settle`). Tested with a real signed payment header (`scripts/x402.test.ts`).
+3. Render failure → 500 → settlement cancelled. Tested.
+4. **Found while testing:** @x402/express settles any < 400 response even if the client has
+   already disconnected, so a caller who gave up mid-render (timeout) would still be charged.
+   `handleDrop` watches `res` for `close` and answers 499 `client_closed` in that case, which
+   cancels settlement. There's a test for it, and it fails with the guard removed.
+
+Config:
+- `X402_NETWORK=base-sepolia` → `eip155:84532`, USDC `0x036C…dCF7e`; `base` → `eip155:8453`,
+  USDC `0x8335…02913`. The asset is pinned explicitly (with USDC's EIP-712 domain name, which
+  is "USDC" on Sepolia and "USD Coin" on mainnet), not left to @x402/evm's defaults.
+- Facilitator defaults to PayAI. Checked live: `/supported` lists v2 `exact` for both chains,
+  and `pay-test` check (a) passed against it locally.
+- `maxTimeoutSeconds: 300` (the payer's authorization window). It must cover queue wait +
+  render + settle, because settlement happens after the render.
+- The server refuses to start on a bad `X402_NETWORK`, a missing or malformed
+  `PAYOUT_ADDRESS`, or a bad `PRICE_USD`.
+- **Spec §6.4 payment description is a placeholder** (`PAYMENT_DESCRIPTION` in `src/x402.ts`).
+  Swap in the spec wording once we have it.
+- `CDP_API_KEY_*` removed from `.env.example`: PayAI doesn't use them and nothing reads them.
+- The x402 middleware fetches the facilitator's `/supported` at startup. If that fails, the
+  request that triggered it gets a **500** from the library, and the next request retries.
+  Seen once locally (PayAI connect timeout). If it shows up on Coolify, warm up with a
+  bodyless `POST /drop` after each deploy.
+- `server.ts` and `pay-test.ts` import `src/env.ts` first (Abdol's fix below). In Docker
+  there's no `.env` and the env comes from Coolify. A value-less `KEY=   # comment` line
+  loads as empty, not as the comment.
+
+## Deploy (MON-42) and mainnet (MON-43)
+`Dockerfile`: node:22-bookworm-slim + Chrome Headless Shell libs, bun 1.4.3 (must match the
+bun that wrote `bun.lock`), `bun install --frozen-lockfile`, Chrome downloaded at build time,
+runs as `node`, `/app/data` volume, `/health` healthcheck.
+
+Coolify: new resource → this repo, build pack **Dockerfile**, port 3000, domain with HTTPS
+(e.g. `https://drop.<server-ip>.sslip.io`), persistent storage mounted at `/app/data`. Env:
+`PUBLIC_BASE_URL` (the https domain, no trailing slash), `X402_NETWORK`, `PAYOUT_ADDRESS`,
+`PRICE_USD=0.25`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL=claude-haiku-5-5`,
+`ELEVENLABS_API_KEY` (optional; without it videos are music-only, no voiceover),
+`MAX_CONCURRENT_RENDERS=1` (2 only with 4+ GB RAM). Then from a laptop:
+`TEST_PAYER_PRIVATE_KEY=0x... X402_NETWORK=base-sepolia bun run pay-test https://drop.<domain>`.
+Then set `DROP_ENDPOINT` in `plugin/src/plugin.ts` (MON-49, Abdol).
+
+Mainnet: change only `X402_NETWORK=base` in Coolify and redeploy. The plugin already
+proposes `eip155:8453`. Testnet pay-tests against a mainnet server will fail, which is
+expected.
+
 ## Important for Tanta too: tsx does not auto-load .env
 `bun run <script>` auto-loads `.env` when bun runs the file directly — but `render-local.ts`
 (and any future entry point run via `tsx` or plain `node`, which is how the server **must**
@@ -125,6 +206,9 @@ offsets if the "real beat" lands somewhere other than ~15s in.
 
 ## Open items
 - PayBox developer portal submission requirements: TBD once account is registered (Track 1).
-- x402 settlement-on-failure behavior (spec §6.3 rule 3): to confirm once `@x402/express`
-  is wired up (Tanta's track) — note here whether it settles only on 2xx or needs restructuring.
-- Mainnet drop transaction hash: TBD after Phase 5.
+- Mainnet drop transaction hash: TBD after Phase 5 (MON-44, joint run via PayBox from Claude.ai).
+- Spec §6 / §6.3 / §6.4 wording: still not in the repo. Check response shape, error codes
+  and the payment description against it.
+- PayBox's request timeout vs our synchronous ~25s+ render: unknown, so confirm on the first
+  E2E. If it times out, the video is still rendered (and visible at `/d/<id>`), but the
+  caller isn't charged (see the disconnect guard below).
