@@ -52,7 +52,8 @@ function photoErrorStatus(err: PhotoError): number {
 const VOICEOVER_TIMEOUT_MS = 15_000;
 
 function sendError(res: express.Response, status: number, error: string, message: string, extra: object = {}) {
-	logger.info('http.error_response', {req: res.locals.reqId, status, error, message, ...extra});
+	// `code`, not `error`: Brimble flags any line containing "error" as ERROR, and a 404 is not one.
+	logger.info('http.error_response', {req: res.locals.reqId, status, code: error, message, ...extra});
 	res.status(status).json({error, message, ...extra});
 }
 
