@@ -18,6 +18,9 @@ export const statusDropPropsSchema = z.object({
 	copy: dropCopySchema,
 	handle: z.string().max(40).optional(),
 	template: z.enum(['brutal', 'market']).default('brutal'),
+	// Optional TTS voiceover track (MON-51) — same URL/staticFile resolution as photoUrl.
+	// Renders silent when absent (no ElevenLabs key, or voiceover generation failed).
+	voiceoverUrl: z.string().optional(),
 });
 
 export type StatusDropProps = z.infer<typeof statusDropPropsSchema>;

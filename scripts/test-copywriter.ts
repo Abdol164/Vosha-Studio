@@ -1,3 +1,4 @@
+import '../src/env.js';
 import {writeCopy} from '../src/copywriter.js';
 
 const cases = [

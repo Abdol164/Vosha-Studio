@@ -86,6 +86,31 @@ Choices beyond the issue text, all on the strict side:
 waiting behind the running ones; the 6th is refused. `renderQueue.isFull()` is for the
 pre-payment check; `run()` re-checks because two requests can race for the last slot.
 
+## Important for Tanta too: tsx does not auto-load .env
+`bun run <script>` auto-loads `.env` when bun runs the file directly — but `render-local.ts`
+(and any future entry point run via `tsx` or plain `node`, which is how the server **must**
+run per the Node/Remotion requirement) does NOT get `.env` for free. This failed completely
+silently: copywriter.ts and voiceover.ts both have safe fallbacks for a missing key, so
+render-local.ts ran for a long time quietly using fallback copy and no audio, no error, no
+warning. Fixed with `src/env.ts` (calls `process.loadEnvFile()`), imported as the first line
+of every entry script. **Tanta's server.ts needs this same import** — same silent-failure
+risk applies to `PAYOUT_ADDRESS`, `X402_FACILITATOR_URL`, etc. if it's started via tsx/node
+without it.
+
+## TTS voiceover (`src/voiceover.ts`, MON-51)
+ElevenLabs. "Library" voices (incl. Tolani, Nigerian accent — would have been the better
+fit for pcg copy) need a paid plan/credits for API access (402 `paid_plan_required`); using
+free-tier "premade" voice Sarah instead (`EXAVITQu4vr4xnSDxMaL`) until/unless funded.
+Script is deliberately short (hook + first point + price + cta, not all 3 points) to fit
+the fixed 10s video without the `<Audio>` track running past the composition and getting
+cut off mid-sentence — placed unwrapped (not in a limited `Sequence`) so the composition's
+own 300-frame length does the clipping.
+
+Also observed: the copywriter's `lines` array occasionally comes back longer than
+`input.points` (zod `.max(3)` rejects it), triggering the existing retry-then-fallback
+path — working as designed (no crash, graceful fallback), just noting it's a real model
+behavior, not hypothetical.
+
 ## Open items
 - PayBox developer portal submission requirements: TBD once account is registered (Track 1).
 - x402 settlement-on-failure behavior (spec §6.3 rule 3): to confirm once `@x402/express`

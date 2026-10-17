@@ -1,18 +1,22 @@
+import '../src/env.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import {bundle} from '@remotion/bundler';
 import {renderMedia, renderStill, selectComposition} from '@remotion/renderer';
 import type {StatusDropProps} from '../remotion/types.js';
 import {writeCopy} from '../src/copywriter.js';
+import {buildVoiceoverScript, generateVoiceover} from '../src/voiceover.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const OUT_DIR = path.join(ROOT, 'data', 'media');
+const PUBLIC_DIR = path.join(ROOT, 'public');
 
 async function buildProps(input: {
 	productName: string;
 	price: string;
 	points: string[];
 	handle?: string;
+	name: string;
 }): Promise<StatusDropProps> {
 	const copy = await writeCopy({
 		productName: input.productName,
@@ -20,6 +24,19 @@ async function buildProps(input: {
 		points: input.points,
 		language: 'pcg',
 	});
+
+	// MON-51: TTS voiceover — written into public/ so StatusDrop.tsx's staticFile()
+	// resolution can find it, same as the sample product photo. Silently skipped when
+	// ELEVENLABS_API_KEY isn't set (generateVoiceover returns null) — the render still
+	// works, just without audio.
+	let voiceoverUrl: string | undefined;
+	const audio = await generateVoiceover(buildVoiceoverScript(copy, input.price));
+	if (audio) {
+		const fileName = `${input.name}-voiceover.mp3`;
+		fs.writeFileSync(path.join(PUBLIC_DIR, fileName), audio);
+		voiceoverUrl = fileName;
+	}
+
 	return {
 		productName: input.productName,
 		price: input.price,
@@ -28,6 +45,7 @@ async function buildProps(input: {
 		copy,
 		handle: input.handle,
 		template: 'brutal',
+		voiceoverUrl,
 	};
 }
 
@@ -64,12 +82,13 @@ async function renderDrop(bundleLocation: string, props: StatusDropProps, name: 
 async function main() {
 	fs.mkdirSync(OUT_DIR, {recursive: true});
 
-	console.log('Generating copy...');
+	console.log('Generating copy + voiceover...');
 	const sampleProps = await buildProps({
 		productName: "Nike Air Force 1 '07",
 		price: '₦45,000',
 		points: ['100% original', 'Sizes 40 to 45', 'Free delivery within Minna'],
 		handle: '@shoebaby_minna',
+		name: 'sample',
 	});
 
 	// Stress test: 60-char product name, 80-char points — must never overflow (spec Phase 1 checkpoint).
@@ -82,6 +101,7 @@ async function main() {
 			'Free same-day delivery within Minna metro and surrounding local government areas',
 		],
 		handle: '@shoebaby_minna',
+		name: 'sample-stress',
 	});
 
 	console.log('Bundling Remotion project...');

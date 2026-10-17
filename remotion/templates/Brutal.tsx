@@ -1,5 +1,5 @@
 import React from 'react';
-import {AbsoluteFill, Sequence} from 'remotion';
+import {AbsoluteFill, Audio, Sequence} from 'remotion';
 import type {StatusDropProps} from '../types';
 import {HookScene} from './scenes/HookScene';
 import {ProductPointsScene} from './scenes/ProductPointsScene';
@@ -15,9 +15,13 @@ export const Brutal: React.FC<StatusDropProps> = ({
 	points,
 	copy,
 	handle,
+	voiceoverUrl,
 }) => {
 	return (
 		<AbsoluteFill>
+			{/* Unwrapped (not inside a limited Sequence) so it plays from frame 0 — the
+			composition's own 300-frame length naturally clips it if the script ran long. */}
+			{voiceoverUrl ? <Audio src={voiceoverUrl} /> : null}
 			<Sequence from={0} durationInFrames={36}>
 				<HookScene hook={copy.hook} />
 			</Sequence>
