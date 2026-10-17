@@ -32,6 +32,13 @@ Starter kit lives in `plugin/` (own package.json, separate from the root bun pro
 (MON-42), then `pnpm build` and upload `plugin/dist/plugin.mjs` via the portal, adding
 that hostname as a configured network host there.
 
+Known gap: couldn't get `pnpm test`'s stricter local conformance check running — it hard-
+requires Node 24.x exactly (not 24+), and installing node@24 via Homebrew on this machine
+hits a persistent `openssl@3` lock error with no actual process holding it (tried 3x,
+removed stale lock files, same result — looks like corrupted local Homebrew state, not
+our code). Not blocking: `pnpm typecheck` and `pnpm build` both pass clean, and PayBox's
+own hosted checks after upload will be the real conformance gate regardless.
+
 ## Deviation from spec: facilitator swapped from Coinbase CDP to PayAI
 Coinbase CDP's portal (`portal.cdp.coinbase.com`) is geo-blocked for both of us (Nigeria) —
 confirmed DNS-level failure for both, not just an OTP/verification issue. Found an
