@@ -8,8 +8,10 @@ Built for MoonPay Hackathons, Chapter 1.
 ## Status
 
 - [x] Remotion `brutal` template (1080x1920, 30fps, 10s)
-- [ ] Copywriter (LLM + fallback, en/pcg/yo)
-- [ ] Express server + x402 payment flow
+- [x] Copywriter (LLM + fallback, en/pcg/yo)
+- [x] Express server (routes, render flow)
+- [x] x402 payment flow (PayAI facilitator, Base Sepolia / Base)
+- [x] Dockerfile (Coolify deploy steps in NOTES.md)
 - [ ] Deploy + mainnet PayBox end-to-end test
 
 ## Development
@@ -19,6 +21,9 @@ bun install
 bun run studio        # Remotion Studio preview
 bun run render:local  # render a sample + stress-test drop to data/media/
 bun run typecheck
+bun run test
+bun run start        # server on $PORT (needs PAYOUT_ADDRESS, see .env.example)
+bun run pay-test     # real x402 payment test, needs TEST_PAYER_PRIVATE_KEY with USDC
 ```
 
 ## Calling it via PayBox (once deployed)
