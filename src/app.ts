@@ -59,6 +59,18 @@ export function createApp(deps: AppDeps) {
 	// Coolify/Traefik terminates TLS in front of us.
 	app.set('trust proxy', 1);
 
+	// Spec §11: CSP restricting media (and everything else) to same-origin. page.ts's
+	// <style>/<script> blocks are static (no user/LLM data interpolated into them — only
+	// into escaped text/attributes), so 'unsafe-inline' here doesn't reopen an XSS hole.
+	app.use((_req, res, next) => {
+		res.set(
+			'Content-Security-Policy',
+			"default-src 'self'; media-src 'self'; img-src 'self'; script-src 'self' 'unsafe-inline'; " +
+				"style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+		);
+		next();
+	});
+
 	app.get('/health', (_req, res) => {
 		res.json({ok: true, queue: deps.queue.stats});
 	});

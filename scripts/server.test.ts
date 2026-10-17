@@ -98,6 +98,15 @@ describe('GET routes', () => {
 		assert.match(res.headers.get('content-type') ?? '', /text\/html/);
 	});
 
+	test('responses carry a self-only Content-Security-Policy (spec §11)', async () => {
+		const res = await fetch(`${baseUrl}/`);
+		const csp = res.headers.get('content-security-policy') ?? '';
+		assert.match(csp, /default-src 'self'/);
+		assert.match(csp, /media-src 'self'/);
+		assert.match(csp, /img-src 'self'/);
+		assert.match(csp, /frame-ancestors 'none'/);
+	});
+
 	for (const id of ['nope', 'drp_../../x', 'drp_aaaaaaaa']) {
 		test(`/d/${id} is 404`, async () => {
 			const res = await fetch(`${baseUrl}/d/${encodeURIComponent(id)}`);
