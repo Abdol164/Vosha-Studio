@@ -270,6 +270,27 @@ than crashing or failing the drop). The sync fix above is implemented and type/u
 tested but **not yet audibly verified** — couldn't generate real audio to listen to once
 the account got locked mid-testing.
 
+### Production incident, 2026-10-17 ~22:17-22:23 UTC: payment settled, client saw 402
+Real paid drops through PayBox were settling on-chain but the client only ever received
+a `402` back — every time. Root cause: the ElevenLabs SDK retries each failing request
+**twice by default** (`maxRetries` defaults to 2). With the per-beat refactor above now
+firing up to 6 parallel `textToSpeech.convert()` calls per drop instead of 1, hitting the
+locked/free-tier account meant up to **18 real HTTP attempts per drop**, each with its
+own retry backoff — slow enough that PayBox's client gave up waiting and re-probed
+(a genuine fresh `402`), while the original request kept running server-side on Brimble
+and settled payment once it eventually finished. Not a bug in the x402 ordering logic
+itself (§6.3 is still correctly implemented and tested) — the request just took long
+enough that the *caller* moved on before our response arrived.
+
+Fixed in `src/voiceover.ts`: every `convert()` call now passes `{maxRetries: 0,
+timeoutInSeconds: 5}` (401/429 aren't transient, and there's already a drop-level
+fallback to no audio, so retrying was pure cost with no benefit), and a 5-minute circuit
+breaker trips on the first failure — every subsequent drop in that window returns `null`
+instantly instead of calling ElevenLabs at all. Verified live against the still-locked
+account: first call now fails in exactly 5s (not whatever the old retry storm took),
+every call after that during the cooldown returns in 0ms. **This needs a Brimble
+redeploy to actually fix the live incident** — it's only fixed in the repo until then.
+
 ## Background music (`src/music.ts`)
 ElevenLabs' music-generation API also turned out to be paid-plan-only (402, confirmed by
 testing — same wall as the library voices). No browser automation available in this
