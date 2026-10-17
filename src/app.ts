@@ -3,6 +3,7 @@ import path from 'node:path';
 import express, {type ErrorRequestHandler, type RequestHandler} from 'express';
 import type {StatusDropProps} from '../remotion/types.js';
 import type {writeCopy as WriteCopyFn} from './copywriter.js';
+import type {MusicTrack} from './music.js';
 import {PhotoError, type fetchPhoto as FetchPhotoFn} from './image.js';
 import {dropPage, homePage, notFoundPage} from './page.js';
 import {QueueFullError, type RenderQueue} from './queue.js';
@@ -10,10 +11,13 @@ import type {RenderFn} from './render.js';
 import type {DropRequest} from './schema.js';
 import {type DropRecord, getDrop, isDropId, mediaDir, newDropId, saveDrop, updateDrop} from './store.js';
 import {validatePaid} from './validate-paid.js';
+import {buildVoiceoverScript, type generateVoiceover as GenerateVoiceoverFn} from './voiceover.js';
 
 export interface AppDeps {
 	fetchPhoto: typeof FetchPhotoFn;
 	writeCopy: typeof WriteCopyFn;
+	generateVoiceover: typeof GenerateVoiceoverFn;
+	pickTrack: () => MusicTrack;
 	render: RenderFn;
 	queue: RenderQueue;
 	// Base for links handed back to callers (video_url, page_url, ...).
@@ -36,6 +40,10 @@ export const TEMPLATES = [
 function photoErrorStatus(err: PhotoError): number {
 	return err.code === 'photo_invalid_url' ? 400 : 422;
 }
+
+// ElevenLabs is optional garnish: past this, the drop renders without a voiceover rather
+// than holding a paid request (and the payer's authorization window) hostage.
+const VOICEOVER_TIMEOUT_MS = 15_000;
 
 function sendError(res: express.Response, status: number, error: string, message: string, extra: object = {}) {
 	res.status(status).json({error, message, ...extra});
@@ -125,6 +133,25 @@ export function createApp(deps: AppDeps) {
 				language: input.language,
 				cta: input.cta,
 			});
+			// Voiceover failures never fail the drop (same idea as the copywriter fallback).
+			let voiceoverUrl: string | undefined;
+			try {
+				const audio = await Promise.race([
+					deps.generateVoiceover(buildVoiceoverScript(copy, input.price)),
+					new Promise<null>((_, reject) =>
+						setTimeout(() => reject(new Error('voiceover timed out')), VOICEOVER_TIMEOUT_MS).unref(),
+					),
+				]);
+				if (audio) {
+					const voiceFile = `${id}-voiceover.mp3`;
+					await fs.writeFile(path.join(mediaDir(), voiceFile), audio);
+					voiceoverUrl = `${internal}/media/${voiceFile}`;
+				}
+			} catch (err) {
+				console.warn(`drop ${id}: voiceover skipped`, err);
+			}
+			const track = deps.pickTrack();
+
 			const props: StatusDropProps = {
 				productName: input.product_name,
 				price: input.price,
@@ -133,6 +160,10 @@ export function createApp(deps: AppDeps) {
 				copy,
 				handle: input.handle,
 				template: input.template ?? 'brutal',
+				voiceoverUrl,
+				// A public/ path, resolved by staticFile() inside the bundle.
+				musicUrl: track.file,
+				musicStartOffsetSeconds: track.startOffsetSeconds,
 			};
 			const now = new Date().toISOString();
 			const record: DropRecord = {id, status: 'rendering', createdAt: now, updatedAt: now, props, copy};

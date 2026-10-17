@@ -1,9 +1,13 @@
+// First: loads .env before any module reads process.env (queue.ts does at import).
+import './env.js';
 import {createApp} from './app.js';
 import {writeCopy} from './copywriter.js';
 import {fetchPhoto} from './image.js';
+import {pickRandomTrack} from './music.js';
 import {renderQueue} from './queue.js';
 import {createRenderer} from './render.js';
 import {ensureDataDirs} from './store.js';
+import {generateVoiceover} from './voiceover.js';
 import {NETWORKS, createPaidMiddleware, x402ConfigFromEnv} from './x402.js';
 
 const port = Number.parseInt(process.env.PORT ?? '3000', 10);
@@ -20,6 +24,8 @@ const render = await createRenderer();
 const app = createApp({
 	fetchPhoto,
 	writeCopy,
+	generateVoiceover,
+	pickTrack: pickRandomTrack,
 	render,
 	queue: renderQueue,
 	publicBaseUrl,

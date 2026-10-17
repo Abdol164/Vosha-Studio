@@ -63,6 +63,8 @@ before(async () => {
 	const app = createApp({
 		fetchPhoto: async () => ({data: Buffer.from('x'), format: 'jpeg', width: 1, height: 1}),
 		writeCopy: async () => ({hook: 'H', lines: ['l'], cta: 'c', caption: 'cap', hashtags: []}),
+		generateVoiceover: async () => null,
+		pickTrack: () => ({file: 'music/test.mp3', startOffsetSeconds: 15}),
 		render: (id, props) => renderImpl(id, props),
 		queue: new RenderQueue(1, 5),
 		publicBaseUrl: 'https://drop.test',

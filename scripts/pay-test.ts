@@ -4,6 +4,7 @@
 //   TEST_PAYER_PRIVATE_KEY=0x... X402_NETWORK=base-sepolia bun run pay-test [base-url]
 //
 // base-url defaults to PUBLIC_BASE_URL, then http://127.0.0.1:$PORT.
+import '../src/env.js';
 import {ExactEvmScheme} from '@x402/evm';
 import {wrapFetchWithPaymentFromConfig} from '@x402/fetch';
 import {createPublicClient, erc20Abi, http} from 'viem';

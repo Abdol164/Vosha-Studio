@@ -145,9 +145,9 @@ Config:
   request that triggered it gets a **500** from the library, and the next request retries.
   Seen once locally (PayAI connect timeout). If it shows up on Coolify, warm up with a
   bodyless `POST /drop` after each deploy.
-- `bun run start` / `bun run pay-test` load `.env` via `--env-file-if-exists` (local only).
-  In Docker the env comes from Coolify. Node doesn't strip a value-less `KEY=   # comment`
-  line into a value, so an empty key there really is empty.
+- `server.ts` and `pay-test.ts` import `src/env.ts` first (Abdol's fix below). In Docker
+  there's no `.env` and the env comes from Coolify. A value-less `KEY=   # comment` line
+  loads as empty, not as the comment.
 
 ## Deploy (MON-42) and mainnet (MON-43)
 `Dockerfile`: node:22-bookworm-slim + Chrome Headless Shell libs, bun 1.4.3 (must match the
@@ -158,6 +158,7 @@ Coolify: new resource → this repo, build pack **Dockerfile**, port 3000, domai
 (e.g. `https://drop.<server-ip>.sslip.io`), persistent storage mounted at `/app/data`. Env:
 `PUBLIC_BASE_URL` (the https domain, no trailing slash), `X402_NETWORK`, `PAYOUT_ADDRESS`,
 `PRICE_USD=0.25`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL=claude-haiku-5-5`,
+`ELEVENLABS_API_KEY` (optional; without it videos are music-only, no voiceover),
 `MAX_CONCURRENT_RENDERS=1` (2 only with 4+ GB RAM). Then from a laptop:
 `TEST_PAYER_PRIVATE_KEY=0x... X402_NETWORK=base-sepolia bun run pay-test https://drop.<domain>`.
 Then set `DROP_ENDPOINT` in `plugin/src/plugin.ts` (MON-49, Abdol).
@@ -165,6 +166,43 @@ Then set `DROP_ENDPOINT` in `plugin/src/plugin.ts` (MON-49, Abdol).
 Mainnet: change only `X402_NETWORK=base` in Coolify and redeploy. The plugin already
 proposes `eip155:8453`. Testnet pay-tests against a mainnet server will fail, which is
 expected.
+
+## Important for Tanta too: tsx does not auto-load .env
+`bun run <script>` auto-loads `.env` when bun runs the file directly — but `render-local.ts`
+(and any future entry point run via `tsx` or plain `node`, which is how the server **must**
+run per the Node/Remotion requirement) does NOT get `.env` for free. This failed completely
+silently: copywriter.ts and voiceover.ts both have safe fallbacks for a missing key, so
+render-local.ts ran for a long time quietly using fallback copy and no audio, no error, no
+warning. Fixed with `src/env.ts` (calls `process.loadEnvFile()`), imported as the first line
+of every entry script. **Tanta's server.ts needs this same import** — same silent-failure
+risk applies to `PAYOUT_ADDRESS`, `X402_FACILITATOR_URL`, etc. if it's started via tsx/node
+without it.
+
+## TTS voiceover (`src/voiceover.ts`, MON-51)
+ElevenLabs. "Library" voices (incl. Tolani, Nigerian accent — would have been the better
+fit for pcg copy) need a paid plan/credits for API access (402 `paid_plan_required`); using
+free-tier "premade" voice Sarah instead (`EXAVITQu4vr4xnSDxMaL`) until/unless funded.
+Script is deliberately short (hook + first point + price + cta, not all 3 points) to fit
+the fixed 10s video without the `<Audio>` track running past the composition and getting
+cut off mid-sentence — placed unwrapped (not in a limited `Sequence`) so the composition's
+own 300-frame length does the clipping.
+
+Also observed: the copywriter's `lines` array occasionally comes back longer than
+`input.points` (zod `.max(3)` rejects it), triggering the existing retry-then-fallback
+path — working as designed (no crash, graceful fallback), just noting it's a real model
+behavior, not hypothetical.
+
+## Background music (`src/music.ts`)
+ElevenLabs' music-generation API also turned out to be paid-plan-only (402, confirmed by
+testing — same wall as the library voices). No browser automation available in this
+environment either, so instead of fighting either of those: 3 Mixkit tracks (free,
+no-attribution license) downloaded manually and dropped in `public/music/`. One is picked
+at random per drop (`pickRandomTrack()`) for variety across renders. Each track's
+`startOffsetSeconds` (currently 15s for all three, untuned by ear) skips the quiet
+intro most royalty-free loops have before the main beat — `<Audio trimBefore={...}>` in
+Brutal.tsx converts that to frames. Mixed at `volume={0.25}` so it sits under the
+voiceover rather than competing with it. Worth listening to all three and adjusting the
+offsets if the "real beat" lands somewhere other than ~15s in.
 
 ## Open items
 - PayBox developer portal submission requirements: TBD once account is registered (Track 1).

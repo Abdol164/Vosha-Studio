@@ -18,6 +18,13 @@ export const statusDropPropsSchema = z.object({
 	copy: dropCopySchema,
 	handle: z.string().max(40).optional(),
 	template: z.enum(['brutal', 'market']).default('brutal'),
+	// Optional TTS voiceover track (MON-51) — same URL/staticFile resolution as photoUrl.
+	// Renders silent when absent (no ElevenLabs key, or voiceover generation failed).
+	voiceoverUrl: z.string().optional(),
+	// Optional background music bed, picked randomly per drop — same URL resolution.
+	musicUrl: z.string().optional(),
+	// Seconds into musicUrl where playback should start (skips the track's quiet intro).
+	musicStartOffsetSeconds: z.number().optional(),
 });
 
 export type StatusDropProps = z.infer<typeof statusDropPropsSchema>;

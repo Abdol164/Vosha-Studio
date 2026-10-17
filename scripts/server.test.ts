@@ -31,6 +31,7 @@ const VALID = {
 // Per-test behaviour, swapped by individual tests.
 let fetchPhotoImpl: AppDeps['fetchPhoto'];
 let renderImpl: AppDeps['render'];
+let voiceoverImpl: AppDeps['generateVoiceover'];
 let queue: RenderQueue;
 let server: Server;
 let baseUrl: string;
@@ -42,6 +43,8 @@ before(async () => {
 	const app = createApp({
 		fetchPhoto: (url) => fetchPhotoImpl(url),
 		writeCopy: async () => COPY,
+		generateVoiceover: (script) => voiceoverImpl(script),
+		pickTrack: () => ({file: 'music/test.mp3', startOffsetSeconds: 15}),
 		render: (id, props) => renderImpl(id, props),
 		get queue() {
 			return queue;
@@ -58,6 +61,7 @@ after(() => server.close());
 
 beforeEach(() => {
 	queue = new RenderQueue(1, 5);
+	voiceoverImpl = async () => null;
 	fetchPhotoImpl = async () => ({data: Buffer.from('jpegbytes'), format: 'jpeg', width: 1080, height: 1080});
 	renderImpl = async (id) => {
 		fs.writeFileSync(path.join(mediaDir(), `${id}.mp4`), 'mp4');
@@ -179,6 +183,39 @@ describe('POST /drop flow', () => {
 
 		const media = await fetch(`${baseUrl}/media/${body.id}.mp4`);
 		assert.equal(await media.text(), 'mp4');
+	});
+
+	test('voiceover and music are passed to the renderer', async () => {
+		let props: Parameters<AppDeps['render']>[1] | undefined;
+		voiceoverImpl = async () => Buffer.from('mp3');
+		const inner = renderImpl;
+		renderImpl = async (id, p) => {
+			props = p;
+			return inner(id, p);
+		};
+		const res = await postDrop(VALID);
+		assert.equal(res.status, 200);
+		const {id} = await res.json();
+		assert.equal(props?.voiceoverUrl, `http://127.0.0.1:9/media/${id}-voiceover.mp3`);
+		assert.equal(fs.readFileSync(path.join(mediaDir(), `${id}-voiceover.mp3`), 'utf8'), 'mp3');
+		assert.equal(props?.musicUrl, 'music/test.mp3');
+		assert.equal(props?.musicStartOffsetSeconds, 15);
+	});
+
+	test('a failing voiceover still renders (silent voice track)', async () => {
+		let props: Parameters<AppDeps['render']>[1] | undefined;
+		voiceoverImpl = async () => {
+			throw new Error('elevenlabs 402');
+		};
+		const inner = renderImpl;
+		renderImpl = async (id, p) => {
+			props = p;
+			return inner(id, p);
+		};
+		const res = await postDrop(VALID);
+		assert.equal(res.status, 200);
+		assert.equal(props?.voiceoverUrl, undefined);
+		assert.equal(props?.musicUrl, 'music/test.mp3');
 	});
 
 	test('photo errors map to 4xx with their code', async () => {

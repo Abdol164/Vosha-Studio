@@ -8,11 +8,12 @@
     "studio": "remotion studio remotion/index.ts",
     "test": "node --import tsx --test scripts/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "start": "node --env-file-if-exists=.env --import tsx src/server.ts",
-    "pay-test": "node --env-file-if-exists=.env --import tsx scripts/pay-test.ts"
+    "start": "node --import tsx src/server.ts",
+    "pay-test": "tsx scripts/pay-test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
+    "@elevenlabs/elevenlabs-js": "^2.73.0",
     "@remotion/bundler": "^4.0.536",
     "@remotion/cli": "^4.0.536",
     "@remotion/google-fonts": "^4.0.536",
