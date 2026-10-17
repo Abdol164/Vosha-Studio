@@ -20,6 +20,7 @@ async function buildProps(input: {
 	handle?: string;
 	name: string;
 	language?: CopywriterInput['language'];
+	template?: StatusDropProps['template'];
 }): Promise<StatusDropProps> {
 	const copy = await writeCopy({
 		productName: input.productName,
@@ -49,7 +50,7 @@ async function buildProps(input: {
 		points: input.points,
 		copy,
 		handle: input.handle,
-		template: 'brutal',
+		template: input.template ?? 'brutal',
 		voiceoverUrl,
 		musicUrl: track.file,
 		musicStartOffsetSeconds: track.startOffsetSeconds,
@@ -120,6 +121,27 @@ async function main() {
 		language: 'en',
 	});
 
+	// Two different products on the Market template, to visually confirm the seeded
+	// randomness (sticker rotation, palette rotation, starburst shape) actually varies
+	// between drops rather than looking identical.
+	const marketProps1 = await buildProps({
+		productName: "Nike Air Force 1 '07",
+		price: '₦45,000',
+		points: ['100% original', 'Sizes 40 to 45', 'Free delivery within Minna'],
+		handle: '@shoebaby_minna',
+		name: 'sample-market-1',
+		template: 'market',
+	});
+
+	const marketProps2 = await buildProps({
+		productName: 'Jollof party packs',
+		price: '₦3,500',
+		points: ['Feeds 2-3 people', 'Ready in 30 minutes', 'Pickup only in Minna'],
+		handle: '@chopnaija',
+		name: 'sample-market-2',
+		template: 'market',
+	});
+
 	console.log('Bundling Remotion project...');
 	const bundleLocation = await bundle({
 		entryPoint: path.join(ROOT, 'remotion', 'index.ts'),
@@ -128,6 +150,8 @@ async function main() {
 	await renderDrop(bundleLocation, sampleProps, 'sample');
 	await renderDrop(bundleLocation, stressProps, 'sample-stress');
 	await renderDrop(bundleLocation, englishProps, 'sample-en');
+	await renderDrop(bundleLocation, marketProps1, 'sample-market-1');
+	await renderDrop(bundleLocation, marketProps2, 'sample-market-2');
 }
 
 main().catch((err) => {

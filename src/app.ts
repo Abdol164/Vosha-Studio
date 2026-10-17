@@ -32,7 +32,7 @@ export interface AppDeps {
 
 export const TEMPLATES = [
 	{id: 'brutal', name: 'Brutal', description: 'Black/white/red high-contrast type, hard cuts.', available: true},
-	{id: 'market', name: 'Market', description: 'Not built yet — renders as brutal.', available: false},
+	{id: 'market', name: 'Market', description: 'Loud yellow/green/red, rotated stickers, price starburst.', available: true},
 ] as const;
 
 // invalid_url is the caller's input being wrong; the rest mean the URL was fine

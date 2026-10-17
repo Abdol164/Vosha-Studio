@@ -1,9 +1,31 @@
 # Build notes
 
 ## Scope cut for the 3pm deadline
-Dropped from tonight's MVP: `market` template, background removal, HTML landing page,
-Bazaar discovery metadata. `StatusDrop.tsx` falls back to `brutal` for `template: "market"`
-until/unless that template gets built.
+Dropped from tonight's MVP: background removal, HTML landing page, Bazaar discovery
+metadata. The `market` template was also cut originally but got built later once the
+server/deploy/plugin work left real time before the actual 8pm EDT deadline — see below.
+
+## `market` template (`remotion/templates/Market.tsx`)
+Built later in the evening, once there was real time left before the actual deadline.
+Same spec §8 timeline as Brutal (0-36/36-225/225-270/270-300, same voiceover+music
+wiring) but a deliberately different motion language — bouncy elastic spring overshoot
+(`useBouncyPop`) and a continuous sine-wave `useWobble` instead of Brutal's heavy
+mechanical jolt — and yellow/green/red stickers/starburst instead of flat bars.
+
+Per-drop variety without per-frame flicker: sticker rotation angle, wobble phase, which
+of the 3 accent colors is dominant, starburst spike count/ratio, and confetti positions
+are all seeded with Remotion's `random(seed)` (deterministic per seed) rather than
+`Math.random()`. The seed is derived from `productName|price|hook` — stable for every
+frame of one render (no jitter, safe for parallelized rendering across Chrome
+instances), different across drops since that content differs. Visually confirmed: two
+different products render with different dominant colors (green vs. red) and different
+starburst shapes — not the same design repeated.
+
+Long point text (up to 80 chars per spec) goes through `StickerBadge`'s auto-fit mode
+(wraps `AutoFitText` internally with a `maxWidth`), not fixed-size text — same overflow
+protection as Brutal, just inside a rotated sticker instead of a flat bar.
+
+`src/app.ts`'s `TEMPLATES` list flipped `market` to `available: true`.
 
 ## Repo layout
 - `remotion/` — the video template (this phase). Entry: `remotion/index.ts`.

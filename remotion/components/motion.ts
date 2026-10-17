@@ -29,3 +29,26 @@ export const useShake = (startFrame: number, durationFrames = 4, magnitude = 6) 
 		y: Math.cos(t * 13) * magnitude * decay,
 	};
 };
+
+// Bouncy, elastic "pop in with overshoot" — lower damping than useSlam for the Market
+// template's playful market-stall energy rather than Brutal's heavy mechanical jolt.
+export const useBouncyPop = (delay = 0) => {
+	const frame = useCurrentFrame();
+	const {fps} = useVideoConfig();
+	return spring({
+		frame: frame - delay,
+		fps,
+		config: {
+			damping: 8,
+			mass: 0.8,
+			stiffness: 140,
+		},
+	});
+};
+
+// Continuous gentle rotation wobble, like a sign swinging on a market stall. Pure
+// function of frame + phase (no random seed needed), so it's safe anywhere.
+export const useWobble = (amplitudeDeg = 2, periodFrames = 45, phase = 0) => {
+	const frame = useCurrentFrame();
+	return Math.sin((frame / periodFrames) * Math.PI * 2 + phase) * amplitudeDeg;
+};

@@ -2,6 +2,7 @@ import React from 'react';
 import {staticFile} from 'remotion';
 import type {StatusDropProps} from './types';
 import {Brutal} from './templates/Brutal';
+import {Market} from './templates/Market';
 
 // photoUrl/voiceoverUrl are each either a remote http(s) URL (the server's generated
 // asset) or a public/ filename (local sample renders) — resolved to a servable URL here.
@@ -15,9 +16,9 @@ export const StatusDrop: React.FC<StatusDropProps> = (props) => {
 		musicUrl: props.musicUrl ? resolveAssetUrl(props.musicUrl) : undefined,
 	};
 
-	// `market` is the stretch template (spec §8) — not built yet, falls back to `brutal`.
 	switch (resolved.template) {
 		case 'market':
+			return <Market {...resolved} />;
 		case 'brutal':
 		default:
 			return <Brutal {...resolved} />;
