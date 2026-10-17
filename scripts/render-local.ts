@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import {bundle} from '@remotion/bundler';
 import {renderMedia, renderStill, selectComposition} from '@remotion/renderer';
 import type {StatusDropProps} from '../remotion/types.js';
+import type {CopywriterInput} from '../src/copywriter.js';
 import {writeCopy} from '../src/copywriter.js';
 import {buildVoiceoverScript, generateVoiceover} from '../src/voiceover.js';
 import {pickRandomTrack} from '../src/music.js';
@@ -18,12 +19,13 @@ async function buildProps(input: {
 	points: string[];
 	handle?: string;
 	name: string;
+	language?: CopywriterInput['language'];
 }): Promise<StatusDropProps> {
 	const copy = await writeCopy({
 		productName: input.productName,
 		price: input.price,
 		points: input.points,
-		language: 'pcg',
+		language: input.language ?? 'pcg',
 	});
 
 	// MON-51: TTS voiceover — written into public/ so StatusDrop.tsx's staticFile()
@@ -109,6 +111,15 @@ async function main() {
 		name: 'sample-stress',
 	});
 
+	const englishProps = await buildProps({
+		productName: "Nike Air Force 1 '07",
+		price: '₦45,000',
+		points: ['100% original', 'Sizes 40 to 45', 'Free delivery within Minna'],
+		handle: '@shoebaby_minna',
+		name: 'sample-en',
+		language: 'en',
+	});
+
 	console.log('Bundling Remotion project...');
 	const bundleLocation = await bundle({
 		entryPoint: path.join(ROOT, 'remotion', 'index.ts'),
@@ -116,6 +127,7 @@ async function main() {
 
 	await renderDrop(bundleLocation, sampleProps, 'sample');
 	await renderDrop(bundleLocation, stressProps, 'sample-stress');
+	await renderDrop(bundleLocation, englishProps, 'sample-en');
 }
 
 main().catch((err) => {
