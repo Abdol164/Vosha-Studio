@@ -2,6 +2,7 @@ import type {RequestHandler} from 'express';
 import {HTTPFacilitatorClient} from '@x402/core/server';
 import {ExactEvmScheme} from '@x402/evm/exact/server';
 import {paymentMiddleware, x402ResourceServer} from '@x402/express';
+import {logger} from './log.js';
 
 // USDC per network. Spelled out (rather than letting @x402/evm pick its default asset)
 // so the address we charge in is pinned and reviewable. name/version are USDC's EIP-712
@@ -87,6 +88,34 @@ export function createPaidMiddleware(config: X402Config): RequestHandler {
 		network,
 		new ExactEvmScheme(),
 	);
+	// Each payment step, tagged with the request id from app.ts where the hook can see it.
+	const reqOf = (transportContext: unknown) =>
+		(transportContext as {request?: {adapter?: {req?: {reqId?: string}}}} | undefined)?.request?.adapter?.req?.reqId;
+	const paymentFields = (ctx: {paymentPayload: unknown; requirements: {network: string; amount: string; asset: string}; transportContext?: unknown}) => ({
+		req: reqOf(ctx.transportContext),
+		network: ctx.requirements.network,
+		amount: ctx.requirements.amount,
+		asset: ctx.requirements.asset,
+		payer: (ctx.paymentPayload as {payload?: {authorization?: {from?: string}}})?.payload?.authorization?.from,
+	});
+	server
+		.onAfterVerify(async (ctx) => {
+			const level = ctx.result.isValid ? 'info' : 'warn';
+			logger[level]('x402.verify', {...paymentFields(ctx), isValid: ctx.result.isValid, invalidReason: ctx.result.invalidReason, invalidMessage: ctx.result.invalidMessage});
+		})
+		.onVerifyFailure(async (ctx) => {
+			logger.warn('x402.verify_error', {...paymentFields(ctx), error: ctx.error});
+		})
+		.onAfterSettle(async (ctx) => {
+			const level = ctx.result.success ? 'info' : 'error';
+			logger[level]('x402.settle', {...paymentFields(ctx), success: ctx.result.success, transaction: ctx.result.transaction, errorReason: ctx.result.errorReason});
+		})
+		.onSettleFailure(async (ctx) => {
+			logger.error('x402.settle_error', {...paymentFields(ctx), error: ctx.error});
+		})
+		.onVerifiedPaymentCanceled(async (ctx) => {
+			logger.info('x402.settlement_canceled', {...paymentFields(ctx), reason: ctx.reason, responseStatus: ctx.responseStatus});
+		});
 	const resource = {
 		url: config.resource,
 		description: PAYMENT_DESCRIPTION,
@@ -109,10 +138,13 @@ export function createPaidMiddleware(config: X402Config): RequestHandler {
 				serviceName: 'Vosha Studio',
 				// x402 v2 only sends the challenge in the PAYMENT-REQUIRED header and leaves
 				// the body as {}. Mirror it in the body too, for clients that read the body.
-				unpaidResponseBody: () => ({
+				unpaidResponseBody: (context) => {
+					logger.info('x402.challenge', {req: reqOf({request: context}), amount: config.amount, network, payTo: config.payTo});
+					return {
 					contentType: 'application/json',
-					body: {x402Version: 2, error: 'Payment required', resource, accepts: [challengeAccept(config)]},
-				}),
+						body: {x402Version: 2, error: 'Payment required', resource, accepts: [challengeAccept(config)]},
+					};
+				},
 			},
 		},
 		server,

@@ -6,7 +6,7 @@
   "scripts": {
     "render:local": "tsx scripts/render-local.ts",
     "studio": "remotion studio remotion/index.ts",
-    "test": "node --import tsx --test scripts/*.test.ts",
+    "test": "LOG_LEVEL=silent node --import tsx --test scripts/*.test.ts",
     "typecheck": "tsc --noEmit",
     "start": "node --import tsx src/server.ts",
     "pay-test": "tsx scripts/pay-test.ts"

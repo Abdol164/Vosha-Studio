@@ -1,4 +1,5 @@
 import type {RequestHandler} from 'express';
+import {logger} from './log.js';
 import {dropRequestSchema} from './schema.js';
 
 // Spec §6.3 ordering, mounted before the x402 middleware:
@@ -15,11 +16,17 @@ export function hasBody(body: unknown): boolean {
 
 export const validatePaid: RequestHandler = (req, res, next) => {
 	if (!hasBody(req.body)) {
+		logger.info('drop.no_body', {req: res.locals.reqId, note: 'passing to x402, expect 402 unless paid'});
 		next();
 		return;
 	}
 	const parsed = dropRequestSchema.safeParse(req.body);
 	if (!parsed.success) {
+		logger.info('drop.invalid_body', {
+			req: res.locals.reqId,
+			keys: req.body && typeof req.body === 'object' ? Object.keys(req.body) : typeof req.body,
+			issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
+		});
 		res.status(400).json({
 			error: 'invalid_request',
 			message: 'Request body does not match the /drop schema.',
@@ -27,6 +34,7 @@ export const validatePaid: RequestHandler = (req, res, next) => {
 		});
 		return;
 	}
+	logger.debug('drop.valid_body', {req: res.locals.reqId, body: parsed.data});
 	res.locals.drop = parsed.data;
 	next();
 };

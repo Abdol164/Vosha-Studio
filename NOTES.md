@@ -291,6 +291,18 @@ Deployed from Tanta's fork (`tantasui/Vosha-Studio`, `main`) with the Dockerfile
   (`remotion bundle` → `/app/build`, `REMOTION_BUNDLE_DIR`), so boot takes about 130 MB. A
   render still peaks around 700 MB, so the instance needs **≥ 1 GB RAM (2 GB recommended)**.
 
+## Logs (`src/log.ts`)
+One JSON line per event, and every line for a request carries the same `req` id. Set
+`LOG_LEVEL=debug` in Brimble to also get request headers (payment headers redacted) and
+the validated body. To debug PayBox, search for `"path":"/drop"` and read in order:
+- `drop.no_body` / `drop.invalid_body` (+ `issues`) → what PayBox sent was rejected or empty
+- `x402.challenge` then `http.request` `status:402` `hasPayment:false` → PayBox's probe got our price
+- `x402.verify` (`isValid`, `invalidReason`) → the paid retry arrived; facilitator verdict
+- `drop.*` steps with `ms` timings → `drop.done` → `x402.settle` (`transaction` = tx hash)
+- `x402.settlement_canceled` (`reason`, `responseStatus`) → we answered >= 400, payer not charged
+If no `/drop` line appears at all, the request never reached us (portal network host, plugin
+endpoint, or PayBox rejected the proposal before calling).
+
 ## Open items
 - PayBox developer portal submission requirements: TBD once account is registered (Track 1).
 - Mainnet drop transaction hash: TBD after Phase 5 (MON-44, joint run via PayBox from Claude.ai).
