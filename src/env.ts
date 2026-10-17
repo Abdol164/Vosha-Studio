@@ -13,3 +13,17 @@ try {
 		throw err;
 	}
 }
+
+// Hosting dashboards (Brimble, Coolify) take values literally, so pasting a line from
+// .env.example brings its inline comment along: X402_NETWORK arrived in production as
+// "base-sepolia            # base-sepolia | base". Strip a whitespace-preceded "#..." tail;
+// none of our values (URLs, 0x addresses, API keys) contain " #".
+export function stripInlineComment(value: string): string {
+	return value.replace(/\s+#.*$/s, '').trim();
+}
+
+for (const [key, value] of Object.entries(process.env)) {
+	if (value !== undefined && /\s#/.test(value)) {
+		process.env[key] = stripInlineComment(value);
+	}
+}
