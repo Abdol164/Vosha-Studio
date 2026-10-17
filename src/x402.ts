@@ -67,12 +67,32 @@ export function x402ConfigFromEnv(env: NodeJS.ProcessEnv, publicBaseUrl: string)
 	};
 }
 
+// Same fields @x402/core puts in the PAYMENT-REQUIRED header for this route.
+export function challengeAccept(config: X402Config) {
+	const {network, usdc, eip712} = NETWORKS[config.network];
+	return {
+		scheme: 'exact',
+		network,
+		amount: config.amount,
+		asset: usdc,
+		payTo: config.payTo,
+		maxTimeoutSeconds: PAYMENT_TIMEOUT_SECONDS,
+		extra: {...eip712},
+	};
+}
+
 export function createPaidMiddleware(config: X402Config): RequestHandler {
 	const {network, usdc, eip712} = NETWORKS[config.network];
 	const server = new x402ResourceServer(new HTTPFacilitatorClient({url: config.facilitatorUrl})).register(
 		network,
 		new ExactEvmScheme(),
 	);
+	const resource = {
+		url: config.resource,
+		description: PAYMENT_DESCRIPTION,
+		mimeType: 'application/json',
+		serviceName: 'Vosha Studio',
+	};
 	return paymentMiddleware(
 		{
 			'POST /drop': {
@@ -87,6 +107,12 @@ export function createPaidMiddleware(config: X402Config): RequestHandler {
 				description: PAYMENT_DESCRIPTION,
 				mimeType: 'application/json',
 				serviceName: 'Vosha Studio',
+				// x402 v2 only sends the challenge in the PAYMENT-REQUIRED header and leaves
+				// the body as {}. Mirror it in the body too, for clients that read the body.
+				unpaidResponseBody: () => ({
+					contentType: 'application/json',
+					body: {x402Version: 2, error: 'Payment required', resource, accepts: [challengeAccept(config)]},
+				}),
 			},
 		},
 		server,

@@ -113,6 +113,8 @@ describe('x402 ordering (spec §6.3)', () => {
 		assert.equal(accept.payTo, PAYOUT);
 		assert.equal(accept.maxTimeoutSeconds, 300);
 		assert.equal(required.resource.url, 'https://drop.test/drop');
+		// The body mirrors the header, for clients that read the challenge from the body.
+		assert.deepEqual(await res.json(), required);
 	});
 
 	test('valid body without payment → 402', async () => {
