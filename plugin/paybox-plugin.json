@@ -1,0 +1,13 @@
+{
+  "tool": "generate_status_drop",
+  "arguments": {
+    "product_name": "Nike Air Force 1 '07",
+    "price": "₦45,000",
+    "photo_url": "https://picsum.photos/1080",
+    "points": ["100% original", "Sizes 40 to 45", "Free delivery within Minna"],
+    "language": "pcg",
+    "template": "brutal",
+    "handle": "@shoebaby_minna",
+    "cta": "DM to order"
+  }
+}

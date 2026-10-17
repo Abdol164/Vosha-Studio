@@ -2,45 +2,34 @@ import path from 'node:path';
 import fs from 'node:fs';
 import {bundle} from '@remotion/bundler';
 import {renderMedia, renderStill, selectComposition} from '@remotion/renderer';
-import type {StatusDropProps} from '../remotion/types';
+import type {StatusDropProps} from '../remotion/types.js';
+import {writeCopy} from '../src/copywriter.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const OUT_DIR = path.join(ROOT, 'data', 'media');
 
-const sampleProps: StatusDropProps = {
-	productName: "Nike Air Force 1 '07",
-	price: '₦45,000',
-	photoUrl: 'sample-product.png',
-	points: ['100% original', 'Sizes 40 to 45', 'Free delivery within Minna'],
-	copy: {
-		hook: 'NEW DROP',
-		lines: ['100% original', 'Sizes 40 to 45', 'Free delivery within Minna'],
-		cta: 'DM to order',
-		caption: 'Original AF1 don land! Sizes 40-45, free delivery for Minna. DM now.',
-		hashtags: ['#AF1', '#NaijaKicks', '#MinnaSellers'],
-	},
-	handle: '@shoebaby_minna',
-	template: 'brutal',
-};
-
-// Stress test: 60-char product name, 80-char points — must never overflow (spec Phase 1 checkpoint).
-const stressProps: StatusDropProps = {
-	...sampleProps,
-	productName: 'Original Authentic Nike Air Force 1 Low 07 LV8 Retro Edition Kicks',
-	points: [
-		'One hundred percent original, brand new in box, never worn, comes with receipt',
-		'Available in sizes 38 39 40 41 42 43 44 45 46, true to size, wide fit available',
-		'Free same-day delivery within Minna metro and surrounding local government areas',
-	],
-	copy: {
-		...sampleProps.copy,
-		lines: [
-			'One hundred percent original, brand new in box, never worn, comes with receipt',
-			'Available in sizes 38 39 40 41 42 43 44 45 46, true to size, wide fit available',
-			'Free same-day delivery within Minna metro and surrounding local government areas',
-		],
-	},
-};
+async function buildProps(input: {
+	productName: string;
+	price: string;
+	points: string[];
+	handle?: string;
+}): Promise<StatusDropProps> {
+	const copy = await writeCopy({
+		productName: input.productName,
+		price: input.price,
+		points: input.points,
+		language: 'pcg',
+	});
+	return {
+		productName: input.productName,
+		price: input.price,
+		photoUrl: 'sample-product.png',
+		points: input.points,
+		copy,
+		handle: input.handle,
+		template: 'brutal',
+	};
+}
 
 async function renderDrop(bundleLocation: string, props: StatusDropProps, name: string) {
 	console.log(`\nRendering "${name}"...`);
@@ -74,6 +63,26 @@ async function renderDrop(bundleLocation: string, props: StatusDropProps, name: 
 
 async function main() {
 	fs.mkdirSync(OUT_DIR, {recursive: true});
+
+	console.log('Generating copy...');
+	const sampleProps = await buildProps({
+		productName: "Nike Air Force 1 '07",
+		price: '₦45,000',
+		points: ['100% original', 'Sizes 40 to 45', 'Free delivery within Minna'],
+		handle: '@shoebaby_minna',
+	});
+
+	// Stress test: 60-char product name, 80-char points — must never overflow (spec Phase 1 checkpoint).
+	const stressProps = await buildProps({
+		productName: 'Original Authentic Nike Air Force 1 Low 07 LV8 Retro Edition Kicks',
+		price: '₦45,000',
+		points: [
+			'One hundred percent original, brand new in box, never worn, comes with receipt',
+			'Available in sizes 38 39 40 41 42 43 44 45 46, true to size, wide fit available',
+			'Free same-day delivery within Minna metro and surrounding local government areas',
+		],
+		handle: '@shoebaby_minna',
+	});
 
 	console.log('Bundling Remotion project...');
 	const bundleLocation = await bundle({
