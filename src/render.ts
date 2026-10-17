@@ -15,6 +15,11 @@ export interface RenderResult {
 	poster: string;
 }
 
+export function renderConcurrency(raw = process.env.RENDER_CONCURRENCY): number {
+	const n = Number.parseInt(raw ?? '', 10);
+	return Number.isFinite(n) && n >= 1 ? Math.min(n, 8) : 2;
+}
+
 export type RenderFn = (id: string, props: StatusDropProps) => Promise<RenderResult>;
 
 // Bundling takes seconds, so it happens once and every render reuses it. The Docker image
@@ -44,6 +49,10 @@ export async function createRenderer(): Promise<RenderFn> {
 				outputLocation: videoPath,
 				inputProps: props,
 				crf: 24,
+				// Remotion defaults to half the CPUs it sees, and in a container that's the
+				// host's core count, so a big host could open many Chrome tabs at once and
+				// OOM a 1-2 GB instance mid-render.
+				concurrency: renderConcurrency(),
 			});
 			await renderStill({composition, serveUrl, output: posterPath, inputProps: props, frame: POSTER_FRAME});
 		} catch (err) {
