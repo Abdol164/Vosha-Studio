@@ -111,6 +111,18 @@ Also observed: the copywriter's `lines` array occasionally comes back longer tha
 path — working as designed (no crash, graceful fallback), just noting it's a real model
 behavior, not hypothetical.
 
+## Background music (`src/music.ts`)
+ElevenLabs' music-generation API also turned out to be paid-plan-only (402, confirmed by
+testing — same wall as the library voices). No browser automation available in this
+environment either, so instead of fighting either of those: 3 Mixkit tracks (free,
+no-attribution license) downloaded manually and dropped in `public/music/`. One is picked
+at random per drop (`pickRandomTrack()`) for variety across renders. Each track's
+`startOffsetSeconds` (currently 15s for all three, untuned by ear) skips the quiet
+intro most royalty-free loops have before the main beat — `<Audio trimBefore={...}>` in
+Brutal.tsx converts that to frames. Mixed at `volume={0.25}` so it sits under the
+voiceover rather than competing with it. Worth listening to all three and adjusting the
+offsets if the "real beat" lands somewhere other than ~15s in.
+
 ## Open items
 - PayBox developer portal submission requirements: TBD once account is registered (Track 1).
 - x402 settlement-on-failure behavior (spec §6.3 rule 3): to confirm once `@x402/express`

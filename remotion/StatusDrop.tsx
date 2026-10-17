@@ -12,6 +12,7 @@ export const StatusDrop: React.FC<StatusDropProps> = (props) => {
 		...props,
 		photoUrl: resolveAssetUrl(props.photoUrl),
 		voiceoverUrl: props.voiceoverUrl ? resolveAssetUrl(props.voiceoverUrl) : undefined,
+		musicUrl: props.musicUrl ? resolveAssetUrl(props.musicUrl) : undefined,
 	};
 
 	// `market` is the stretch template (spec §8) — not built yet, falls back to `brutal`.

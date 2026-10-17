@@ -6,6 +6,7 @@ import {renderMedia, renderStill, selectComposition} from '@remotion/renderer';
 import type {StatusDropProps} from '../remotion/types.js';
 import {writeCopy} from '../src/copywriter.js';
 import {buildVoiceoverScript, generateVoiceover} from '../src/voiceover.js';
+import {pickRandomTrack} from '../src/music.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const OUT_DIR = path.join(ROOT, 'data', 'media');
@@ -37,6 +38,8 @@ async function buildProps(input: {
 		voiceoverUrl = fileName;
 	}
 
+	const track = pickRandomTrack();
+
 	return {
 		productName: input.productName,
 		price: input.price,
@@ -46,6 +49,8 @@ async function buildProps(input: {
 		handle: input.handle,
 		template: 'brutal',
 		voiceoverUrl,
+		musicUrl: track.file,
+		musicStartOffsetSeconds: track.startOffsetSeconds,
 	};
 }
 
