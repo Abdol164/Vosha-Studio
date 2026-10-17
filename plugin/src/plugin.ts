@@ -12,14 +12,18 @@ const PRICE_USDC = "0.25";
 
 const dropInputSchema = z
 	.object({
-		product_name: z.string().min(1).max(60),
-		price: z.string().min(1).max(24),
-		photo_url: z.url(),
-		points: z.array(z.string().min(1).max(80)).min(1).max(3),
-		language: z.enum(["en", "pcg", "yo"]).optional(),
-		template: z.enum(["brutal", "market"]).optional(),
-		handle: z.string().max(40).optional(),
-		cta: z.string().max(24).optional(),
+		product_name: z.string().min(1).max(60).describe("Product name as it should appear on screen, max 60 characters."),
+		price: z.string().min(1).max(24).describe('Price exactly as the seller writes it, e.g. "₦45,000".'),
+		// https only: the server refuses anything else with a 400, which PayBox can't
+		// turn into a payment, so the proposal would fail before approval.
+		photo_url: z
+			.url({ protocol: /^https$/ })
+			.describe("Public https:// URL of the product photo (JPEG, PNG or WebP, max 8 MB). Uploaded chat images have no URL; ask the user for a link."),
+		points: z.array(z.string().min(1).max(80)).min(1).max(3).describe("1 to 3 selling points, max 80 characters each."),
+		language: z.enum(["en", "pcg", "yo"]).optional().describe("Copy language: en (English), pcg (Nigerian Pidgin, default), yo (Yoruba)."),
+		template: z.enum(["brutal", "market"]).optional().describe("Visual style, default brutal."),
+		handle: z.string().max(40).optional().describe("Seller's social handle, e.g. @shoebaby_minna."),
+		cta: z.string().max(24).optional().describe('Call to action, e.g. "DM to order".'),
 	})
 	.strict();
 
