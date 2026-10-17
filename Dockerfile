@@ -35,12 +35,14 @@ ENV NODE_ENV=production \
 	PORT=3000 \
 	DATA_DIR=/app/data \
 	REMOTION_BUNDLE_DIR=/app/build
-RUN mkdir -p /app/data && chown -R node:node /app
-USER node
+COPY docker-entrypoint.sh ./
+RUN mkdir -p /app/data && chown -R node:node /app && chmod +x docker-entrypoint.sh
+# No USER node here: docker-entrypoint.sh fixes the volume's ownership as root, then
+# drops to node for the server itself.
 VOLUME /app/data
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
 	CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
 
-CMD ["node", "--import", "tsx", "src/server.ts"]
+CMD ["./docker-entrypoint.sh"]
