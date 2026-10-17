@@ -1,3 +1,4 @@
+import {existsSync} from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {bundle} from '@remotion/bundler';
@@ -16,12 +17,18 @@ export interface RenderResult {
 
 export type RenderFn = (id: string, props: StatusDropProps) => Promise<RenderResult>;
 
-// Bundling takes seconds, so it happens once at startup and every render reuses it.
+// Bundling takes seconds, so it happens once and every render reuses it. The Docker image
+// prebuilds it (REMOTION_BUNDLE_DIR) because webpack peaks around 650 MB, which OOM-killed
+// a 512 MB Brimble instance at boot.
 export async function createRenderer(): Promise<RenderFn> {
 	// Otherwise Remotion downloads Chrome lazily on the first render, and a failed download
 	// there escapes as an uncaught rejection that kills the process mid-request.
 	await ensureBrowser();
-	const serveUrl = await bundle({entryPoint: path.join(ROOT, 'remotion', 'index.ts')});
+	const prebuilt = process.env.REMOTION_BUNDLE_DIR;
+	const serveUrl =
+		prebuilt && existsSync(path.join(prebuilt, 'index.html'))
+			? prebuilt
+			: await bundle({entryPoint: path.join(ROOT, 'remotion', 'index.ts')});
 
 	return async (id, props) => {
 		const video = `${id}.mp4`;
