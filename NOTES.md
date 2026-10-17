@@ -65,6 +65,27 @@ testing):
    any parse/response failure regardless, so this fails safe either way — but disabling
    thinking makes the LLM path actually succeed instead of silently falling back.
 
+## Photo fetch (`src/image.ts`, MON-37)
+Choices beyond the issue text, all on the strict side:
+- **Default port only** (443) and no `user:pass@` in the URL — no reason for a product
+  photo to live elsewhere, and it stops `/drop` being used to port-scan public hosts.
+- **Every** resolved address must be public, not just the first; the check runs inside the
+  socket's own DNS lookup, so the vetted IP is the one connected to (no rebinding gap).
+  IP literals (incl. `0x7f.1`, `2130706433`, `[::ffff:127.0.0.1]`) are checked before
+  connecting because Node skips the lookup hook for them. IPv6 is allow-listed to global
+  unicast; 6to4/Teredo/NAT64/IPv4-mapped are judged by (or blocked for) the embedded IPv4.
+- The 5s deadline covers the whole fetch including redirects and body, not per hop.
+- Small photos are **upscaled** to 1080 on the long edge (issue says "resize to 1080px long
+  edge"); flip to `withoutEnlargement` if that looks bad in renders. Transparent images stay
+  PNG, everything else becomes JPEG q88; EXIF rotation applied, metadata stripped.
+- Errors are `PhotoError` with a `code` (`photo_blocked_host`, `photo_too_large`, ...) for
+  the route to map to a 4xx.
+
+## Render queue (`src/queue.ts`, MON-38)
+`MAX_CONCURRENT_RENDERS` is clamped to 1..2. "503 if queue > 5" is read as: at most 5 jobs
+waiting behind the running ones; the 6th is refused. `renderQueue.isFull()` is for the
+pre-payment check; `run()` re-checks because two requests can race for the last slot.
+
 ## Open items
 - PayBox developer portal submission requirements: TBD once account is registered (Track 1).
 - x402 settlement-on-failure behavior (spec §6.3 rule 3): to confirm once `@x402/express`
