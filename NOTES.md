@@ -1,5 +1,18 @@
 # Build notes
 
+## ✅ Real mainnet drop, paid through PayBox (spec definition of done)
+- **Transaction:** `0x9cfde3ced7e048b938ff45ff5f313208b8fa75750ad051967a02f1013e778d81` (Base mainnet, `eip155:8453`, 0.25 USDC)
+- **Drop:** `drp_up6BYKNM` — https://vosha-studio.brimble.app/d/drp_up6BYKNM
+- **Payer:** `0x99f8545d6358049A7e564A7E9777d4cb1A6CFC46`
+- **When:** 2026-10-17 23:31:17 UTC
+- Full request took 62s (render alone: 60.8s) — PayBox's client UI timed out and showed
+  an error to the user, but the backend completed successfully: photo fetched, copy
+  generated, video rendered (market template, no voiceover — ElevenLabs was disabled),
+  payment verified and settled. Video confirmed live and playable (920KB, HTTP 200)
+  after the fact. The render-time-vs-client-timeout gap is a real follow-up item (see
+  spec §9 "if renders are slower... reduce to 8s/240 frames, or scale: 0.75"), but this
+  transaction is genuine proof the full paid flow works end to end.
+
 ## Scope cut for the 3pm deadline
 Dropped from tonight's MVP: HTML landing page, Bazaar discovery metadata. The `market`
 template and background removal were also cut originally but got built later once the
