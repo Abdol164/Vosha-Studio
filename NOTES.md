@@ -204,6 +204,15 @@ Brutal.tsx converts that to frames. Mixed at `volume={0.25}` so it sits under th
 voiceover rather than competing with it. Worth listening to all three and adjusting the
 offsets if the "real beat" lands somewhere other than ~15s in.
 
+## Brimble deploy (replaces Coolify for now)
+Deployed from Tanta's fork (`tantasui/Vosha-Studio`, `main`) with the Dockerfile build.
+- The first deploy crashed because env values were pasted with their `.env.example` comments.
+  `src/env.ts` now strips them.
+- The second deploy was OOM-killed at boot: the Remotion webpack bundle peaks around 650 MB,
+  and the instance capped the Node heap near 256 MB. The Dockerfile now prebuilds the bundle
+  (`remotion bundle` → `/app/build`, `REMOTION_BUNDLE_DIR`), so boot takes about 130 MB. A
+  render still peaks around 700 MB, so the instance needs **≥ 1 GB RAM (2 GB recommended)**.
+
 ## Open items
 - PayBox developer portal submission requirements: TBD once account is registered (Track 1).
 - Mainnet drop transaction hash: TBD after Phase 5 (MON-44, joint run via PayBox from Claude.ai).

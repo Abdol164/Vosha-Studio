@@ -27,9 +27,14 @@ COPY src ./src
 COPY remotion ./remotion
 COPY public ./public
 
+# Prebuild the Remotion bundle here: webpack peaks ~650 MB, too much to do at boot on a
+# small instance. render.ts uses it when REMOTION_BUNDLE_DIR points at it.
+RUN node_modules/.bin/remotion bundle remotion/index.ts --out-dir=/app/build
+
 ENV NODE_ENV=production \
 	PORT=3000 \
-	DATA_DIR=/app/data
+	DATA_DIR=/app/data \
+	REMOTION_BUNDLE_DIR=/app/build
 RUN mkdir -p /app/data && chown -R node:node /app
 USER node
 VOLUME /app/data
