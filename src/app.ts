@@ -1,10 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {randomBytes} from 'node:crypto';
 import express, {type ErrorRequestHandler, type RequestHandler} from 'express';
 import type {StatusDropProps} from '../remotion/types.js';
 import type {writeCopy as WriteCopyFn} from './copywriter.js';
 import type {MusicTrack} from './music.js';
 import {PhotoError, type fetchPhoto as FetchPhotoFn} from './image.js';
+import {logger, safeHeaders} from './log.js';
 import {dropPage, homePage, notFoundPage} from './page.js';
 import {QueueFullError, type RenderQueue} from './queue.js';
 import type {RenderFn} from './render.js';
@@ -50,6 +52,7 @@ function photoErrorStatus(err: PhotoError): number {
 const VOICEOVER_TIMEOUT_MS = 15_000;
 
 function sendError(res: express.Response, status: number, error: string, message: string, extra: object = {}) {
+	logger.info('http.error_response', {req: res.locals.reqId, status, error, message, ...extra});
 	res.status(status).json({error, message, ...extra});
 }
 
@@ -62,6 +65,37 @@ export function createApp(deps: AppDeps) {
 	app.disable('x-powered-by');
 	// Coolify/Traefik terminates TLS in front of us.
 	app.set('trust proxy', 1);
+
+	// One line per request, tagged with a short id that the /drop and x402 logs reuse.
+	// hasPayment is the key thing to look for when debugging PayBox: its probe arrives
+	// without a payment header (expect 402), and the paid retry arrives with one.
+	app.use((req, res, next) => {
+		const reqId = randomBytes(4).toString('hex');
+		const start = Date.now();
+		res.locals.reqId = reqId;
+		(req as express.Request & {reqId?: string}).reqId = reqId;
+		const hasPayment = Boolean(req.get('payment-signature') || req.get('x-payment'));
+		if (req.path !== '/health') {
+			logger.debug('http.request_headers', {req: reqId, headers: safeHeaders(req.headers)});
+		}
+		res.on('close', () => {
+			// /health is polled by the platform every few seconds; keep it out of info logs.
+			const level = req.path === '/health' ? 'debug' : 'info';
+			logger[level]('http.request', {
+				req: reqId,
+				method: req.method,
+				path: req.originalUrl,
+				status: res.statusCode,
+				ms: Date.now() - start,
+				hasPayment,
+				contentLength: req.get('content-length') ?? null,
+				ua: req.get('user-agent') ?? null,
+				ip: req.ip,
+				finished: res.writableFinished,
+			});
+		});
+		next();
+	});
 
 	// Spec §11: CSP restricting media (and everything else) to same-origin. page.ts's
 	// <style>/<script> blocks are static (no user/LLM data interpolated into them — only
@@ -115,6 +149,9 @@ export function createApp(deps: AppDeps) {
 	};
 
 	const handleDrop: RequestHandler = async (_req, res, next) => {
+		const reqId = res.locals.reqId as string;
+		const t0 = Date.now();
+		const since = () => Date.now() - t0;
 		// x402 settles any < 400 response, even one nobody is left to receive. If the
 		// caller gives up mid-render we must answer >= 400 so they aren't charged for it.
 		let clientGone = false;
@@ -128,10 +165,20 @@ export function createApp(deps: AppDeps) {
 			return;
 		}
 		const id = newDropId();
+		logger.info('drop.start', {
+			req: reqId,
+			drop: id,
+			photoHost: new URL(input.photo_url).host,
+			points: input.points.length,
+			language: input.language ?? 'pcg',
+			template: input.template ?? 'brutal',
+			queue: deps.queue.stats,
+		});
 		try {
 			let photo;
 			try {
 				photo = await deps.fetchPhoto(input.photo_url);
+				logger.info('drop.photo', {req: reqId, drop: id, ms: since(), format: photo.format, width: photo.width, height: photo.height, bytes: photo.data.length});
 			} catch (err) {
 				if (err instanceof PhotoError) {
 					sendError(res, photoErrorStatus(err), err.code, err.message);
@@ -141,6 +188,7 @@ export function createApp(deps: AppDeps) {
 			}
 			if (deps.removeBackground) {
 				const cutout = await deps.removeBackground(photo.data, photo.format === 'png' ? 'image/png' : 'image/jpeg');
+				logger.info('drop.background_removal', {req: reqId, drop: id, ms: since(), ok: Boolean(cutout)});
 				if (cutout) {
 					photo = {...photo, data: cutout, format: 'png'};
 				}
@@ -155,6 +203,7 @@ export function createApp(deps: AppDeps) {
 				language: input.language,
 				cta: input.cta,
 			});
+			logger.info('drop.copy', {req: reqId, drop: id, ms: since(), hook: copy.hook, lines: copy.lines.length});
 			// Voiceover failures never fail the drop (same idea as the copywriter fallback).
 			// One clip per story beat (hook/point/price/cta) rather than one long clip from
 			// frame 0, so narration lands when its beat actually appears on screen — see
@@ -175,8 +224,9 @@ export function createApp(deps: AppDeps) {
 						voiceoverClips[clip.key] = `${internal}/media/${voiceFile}`;
 					}
 				}
+				logger.info('drop.voiceover', {req: reqId, drop: id, ms: since(), clips: voiceoverClips ? Object.keys(voiceoverClips) : []});
 			} catch (err) {
-				console.warn(`drop ${id}: voiceover skipped`, err);
+				logger.warn('drop.voiceover_skipped', {req: reqId, drop: id, ms: since(), error: err});
 			}
 			const track = deps.pickTrack();
 
@@ -198,8 +248,13 @@ export function createApp(deps: AppDeps) {
 			await saveDrop(record);
 
 			let result;
+			logger.info('drop.render_queued', {req: reqId, drop: id, ms: since(), queue: deps.queue.stats});
 			try {
-				result = await deps.queue.run(() => deps.render(id, props));
+				result = await deps.queue.run(() => {
+					logger.info('drop.render_start', {req: reqId, drop: id, ms: since()});
+					return deps.render(id, props);
+				});
+				logger.info('drop.render_done', {req: reqId, drop: id, ms: since()});
 			} catch (err) {
 				const busy = err instanceof QueueFullError;
 				await updateDrop(id, {status: 'failed', error: busy ? 'queue_full' : String(err)});
@@ -207,7 +262,7 @@ export function createApp(deps: AppDeps) {
 					res.set('Retry-After', '60');
 					sendError(res, 503, 'busy', 'Render queue is full, try again in a minute.');
 				} else {
-					console.error(`render ${id} failed`, err);
+					logger.error('drop.render_failed', {req: reqId, drop: id, ms: since(), error: err});
 					sendError(res, 500, 'render_failed', 'Video render failed.');
 				}
 				return;
@@ -215,10 +270,11 @@ export function createApp(deps: AppDeps) {
 
 			await updateDrop(id, {status: 'done', video: result.video, poster: result.poster});
 			if (clientGone) {
-				console.warn(`drop ${id} rendered after the client disconnected; not settling`);
+				logger.warn('drop.client_gone', {req: reqId, drop: id, ms: since(), note: 'rendered after the client disconnected; answering 499 so x402 does not settle'});
 				sendError(res, 499, 'client_closed', 'Client disconnected before the render finished.');
 				return;
 			}
+			logger.info('drop.done', {req: reqId, drop: id, ms: since()});
 			res.json({
 				id,
 				video_url: mediaUrl(result.video),
@@ -241,7 +297,7 @@ export function createApp(deps: AppDeps) {
 	const onError: ErrorRequestHandler = (err, _req, res, _next) => {
 		// body-parser errors (bad JSON, too large) carry their own 4xx status.
 		const status = typeof err?.status === 'number' && err.status >= 400 && err.status < 500 ? err.status : 500;
-		if (status === 500) console.error(err);
+		if (status === 500) logger.error('http.unhandled_error', {req: res.locals.reqId, error: err, stack: err?.stack});
 		if (res.headersSent) return;
 		if (status === 404) {
 			sendError(res, 404, 'not_found', 'Not found.');
