@@ -5,9 +5,9 @@ import { atomicAmount, proposeX402, x402OutputSchema } from "./paybox.js";
 
 const PROTOCOL_VERSION = "2026-07-28";
 
-// TODO: replace with the real deployed domain once the server (Linear MON-42) is live,
-// and add this hostname to the plugin's configured network hosts in the portal.
-const DROP_ENDPOINT = "https://drop.CHANGE-ME.sslip.io/drop";
+// Live since MON-42 (Brimble deploy). Add this hostname to the plugin's configured
+// network hosts in the portal before uploading.
+const DROP_ENDPOINT = "https://vosha-studio.brimble.app/drop";
 const PRICE_USDC = "0.25";
 
 const dropInputSchema = z

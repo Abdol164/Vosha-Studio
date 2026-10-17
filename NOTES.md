@@ -27,10 +27,21 @@ an x402 payment against our own hosted `/drop` endpoint. PayBox's runtime handle
 approval, payment, and the actual fetch; the plugin just proposes.
 
 Starter kit lives in `plugin/` (own package.json, separate from the root bun project).
-`DROP_ENDPOINT` in `plugin/src/plugin.ts` is still a placeholder
-(`https://drop.CHANGE-ME.sslip.io/drop`) — must be updated once the server is deployed
-(MON-42), then `pnpm build` and upload `plugin/dist/plugin.mjs` via the portal, adding
-that hostname as a configured network host there.
+`DROP_ENDPOINT` now points at the live server: `https://vosha-studio.brimble.app/drop`
+(confirmed live: /health, /, /templates, and bodyless POST /drop → 402 all checked by
+hand). Builds clean (`dist/plugin.mjs`, 385KB).
+
+**Not ready to upload yet**: the plugin proposes `chain: "eip155:8453"` (Base mainnet,
+correct for the final submission), but the live server is still on testnet
+(`eip155:84532` — confirmed via the 402 response's payment requirements). Uploading now
+would make every proposal target the wrong chain for what the server actually accepts.
+Wait for MON-43 (mainnet switch on Brimble) before uploading via the portal and adding
+`vosha-studio.brimble.app` as a configured network host there.
+
+Also found and fixed before this: the live deployment's `PUBLIC_BASE_URL` wasn't set
+(defaulted to the `https://drop.example.com` placeholder), which would have put a dead
+domain in every `resource.url` AND every `video_url`/`poster_url`/`page_url` returned to
+a paying caller. Fixed on Brimble, reconfirmed in the 402 response.
 
 Known gap: couldn't get `pnpm test`'s stricter local conformance check running — it hard-
 requires Node 24.x exactly (not 24+), and installing node@24 via Homebrew on this machine
