@@ -1,7 +1,7 @@
 import '../src/env.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import {buildVoiceoverScript, generateVoiceover} from '../src/voiceover.js';
+import {buildVoiceoverSegments, generateVoiceover} from '../src/voiceover.js';
 import {writeCopy} from '../src/copywriter.js';
 
 const copy = await writeCopy({
@@ -11,18 +11,19 @@ const copy = await writeCopy({
 	language: 'pcg',
 });
 
-const script = buildVoiceoverScript(copy, '₦45,000');
-console.log('script:', script);
-console.log('script length (chars):', script.length);
+const segments = buildVoiceoverSegments(copy, '₦45,000');
+console.log('segments:', segments);
 
-const audio = await generateVoiceover(script);
-if (!audio) {
+const clips = await generateVoiceover(copy, '₦45,000');
+if (!clips) {
 	console.log('No ELEVENLABS_API_KEY set — got null as expected fallback.');
 	process.exit(0);
 }
 
 const outDir = path.resolve(import.meta.dirname, '..', 'data', 'media');
 fs.mkdirSync(outDir, {recursive: true});
-const outPath = path.join(outDir, 'test-voiceover.mp3');
-fs.writeFileSync(outPath, audio);
-console.log(`Wrote ${audio.length} bytes to data/media/test-voiceover.mp3`);
+for (const clip of clips) {
+	const outPath = path.join(outDir, `test-voiceover-${clip.key}.mp3`);
+	fs.writeFileSync(outPath, clip.audio);
+	console.log(`Wrote ${clip.audio.length} bytes to data/media/test-voiceover-${clip.key}.mp3`);
+}

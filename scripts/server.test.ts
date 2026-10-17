@@ -43,7 +43,7 @@ before(async () => {
 	const app = createApp({
 		fetchPhoto: (url) => fetchPhotoImpl(url),
 		writeCopy: async () => COPY,
-		generateVoiceover: (script) => voiceoverImpl(script),
+		generateVoiceover: (copy, price) => voiceoverImpl(copy, price),
 		pickTrack: () => ({file: 'music/test.mp3', startOffsetSeconds: 15}),
 		render: (id, props) => renderImpl(id, props),
 		get queue() {
@@ -196,7 +196,10 @@ describe('POST /drop flow', () => {
 
 	test('voiceover and music are passed to the renderer', async () => {
 		let props: Parameters<AppDeps['render']>[1] | undefined;
-		voiceoverImpl = async () => Buffer.from('mp3');
+		voiceoverImpl = async () => [
+			{key: 'hook', audio: Buffer.from('mp3-hook')},
+			{key: 'price', audio: Buffer.from('mp3-price')},
+		];
 		const inner = renderImpl;
 		renderImpl = async (id, p) => {
 			props = p;
@@ -205,8 +208,9 @@ describe('POST /drop flow', () => {
 		const res = await postDrop(VALID);
 		assert.equal(res.status, 200);
 		const {id} = await res.json();
-		assert.equal(props?.voiceoverUrl, `http://127.0.0.1:9/media/${id}-voiceover.mp3`);
-		assert.equal(fs.readFileSync(path.join(mediaDir(), `${id}-voiceover.mp3`), 'utf8'), 'mp3');
+		assert.equal(props?.voiceoverClips?.hook, `http://127.0.0.1:9/media/${id}-voiceover-hook.mp3`);
+		assert.equal(props?.voiceoverClips?.price, `http://127.0.0.1:9/media/${id}-voiceover-price.mp3`);
+		assert.equal(fs.readFileSync(path.join(mediaDir(), `${id}-voiceover-hook.mp3`), 'utf8'), 'mp3-hook');
 		assert.equal(props?.musicUrl, 'music/test.mp3');
 		assert.equal(props?.musicStartOffsetSeconds, 15);
 	});
@@ -223,7 +227,7 @@ describe('POST /drop flow', () => {
 		};
 		const res = await postDrop(VALID);
 		assert.equal(res.status, 200);
-		assert.equal(props?.voiceoverUrl, undefined);
+		assert.equal(props?.voiceoverClips, undefined);
 		assert.equal(props?.musicUrl, 'music/test.mp3');
 	});
 

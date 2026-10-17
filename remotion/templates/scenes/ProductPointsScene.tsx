@@ -5,9 +5,7 @@ import {interFontFamily} from '../../fonts';
 import {AutoFitText} from '../../components/AutoFitText';
 import {IndexTag} from '../../components/IndexTag';
 import {useSlam} from '../../components/motion';
-
-const REVEAL_FRAMES = 84; // local 0-84: product reveal, matches spec frames 36-120
-const POINT_SLOT = 35; // 3 points * 35 = 105 frames, matches spec frames 120-225
+import {POINT_SLOT, REVEAL_FRAMES} from '../timeline';
 
 export const ProductPointsScene: React.FC<{
 	photoUrl: string;

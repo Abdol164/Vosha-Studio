@@ -6,7 +6,7 @@ import {renderMedia, renderStill, selectComposition} from '@remotion/renderer';
 import type {StatusDropProps} from '../remotion/types.js';
 import type {CopywriterInput} from '../src/copywriter.js';
 import {writeCopy} from '../src/copywriter.js';
-import {buildVoiceoverScript, generateVoiceover} from '../src/voiceover.js';
+import {generateVoiceover} from '../src/voiceover.js';
 import {pickRandomTrack} from '../src/music.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -29,16 +29,24 @@ async function buildProps(input: {
 		language: input.language ?? 'pcg',
 	});
 
-	// MON-51: TTS voiceover — written into public/ so StatusDrop.tsx's staticFile()
-	// resolution can find it, same as the sample product photo. Silently skipped when
-	// ELEVENLABS_API_KEY isn't set (generateVoiceover returns null) — the render still
-	// works, just without audio.
-	let voiceoverUrl: string | undefined;
-	const audio = await generateVoiceover(buildVoiceoverScript(copy, input.price));
-	if (audio) {
-		const fileName = `${input.name}-voiceover.mp3`;
-		fs.writeFileSync(path.join(PUBLIC_DIR, fileName), audio);
-		voiceoverUrl = fileName;
+	// MON-51: TTS voiceover — one clip per story beat, written into public/ so
+	// StatusDrop.tsx's staticFile() resolution can find them, same as the sample product
+	// photo. Silently skipped when ELEVENLABS_API_KEY isn't set (generateVoiceover
+	// returns null) or on any other failure (quota/rate-limit/network) — same resilience
+	// as the server (src/app.ts), so a flaky ElevenLabs account doesn't crash the render.
+	let voiceoverClips: Record<string, string> | undefined;
+	try {
+		const clips = await generateVoiceover(copy, input.price);
+		if (clips) {
+			voiceoverClips = {};
+			for (const clip of clips) {
+				const fileName = `${input.name}-voiceover-${clip.key}.mp3`;
+				fs.writeFileSync(path.join(PUBLIC_DIR, fileName), clip.audio);
+				voiceoverClips[clip.key] = fileName;
+			}
+		}
+	} catch (err) {
+		console.warn(`"${input.name}": voiceover skipped`, err instanceof Error ? err.message : err);
 	}
 
 	const track = pickRandomTrack();
@@ -51,7 +59,7 @@ async function buildProps(input: {
 		copy,
 		handle: input.handle,
 		template: input.template ?? 'brutal',
-		voiceoverUrl,
+		voiceoverClips,
 		musicUrl: track.file,
 		musicStartOffsetSeconds: track.startOffsetSeconds,
 	};

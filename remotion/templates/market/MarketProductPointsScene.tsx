@@ -5,9 +5,7 @@ import {AutoFitText} from '../../components/AutoFitText';
 import {StickerBadge} from '../../components/StickerBadge';
 import {useBouncyPop} from '../../components/motion';
 import {MARKET_COLORS, pickMarketPalette} from './palette';
-
-const REVEAL_FRAMES = 84; // matches Brutal's beat so both templates feel in sync with music
-const POINT_SLOT = 35;
+import {POINT_SLOT, REVEAL_FRAMES} from '../timeline';
 
 export const MarketProductPointsScene: React.FC<{
 	photoUrl: string;

@@ -11,7 +11,7 @@ import type {RenderFn} from './render.js';
 import type {DropRequest} from './schema.js';
 import {type DropRecord, getDrop, isDropId, mediaDir, newDropId, saveDrop, updateDrop} from './store.js';
 import {validatePaid} from './validate-paid.js';
-import {buildVoiceoverScript, type generateVoiceover as GenerateVoiceoverFn} from './voiceover.js';
+import type {generateVoiceover as GenerateVoiceoverFn} from './voiceover.js';
 
 export interface AppDeps {
 	fetchPhoto: typeof FetchPhotoFn;
@@ -146,18 +146,24 @@ export function createApp(deps: AppDeps) {
 				cta: input.cta,
 			});
 			// Voiceover failures never fail the drop (same idea as the copywriter fallback).
-			let voiceoverUrl: string | undefined;
+			// One clip per story beat (hook/point/price/cta) rather than one long clip from
+			// frame 0, so narration lands when its beat actually appears on screen — see
+			// VoiceoverTrack in Brutal.tsx/Market.tsx.
+			let voiceoverClips: Record<string, string> | undefined;
 			try {
-				const audio = await Promise.race([
-					deps.generateVoiceover(buildVoiceoverScript(copy, input.price)),
+				const clips = await Promise.race([
+					deps.generateVoiceover(copy, input.price),
 					new Promise<null>((_, reject) =>
 						setTimeout(() => reject(new Error('voiceover timed out')), VOICEOVER_TIMEOUT_MS).unref(),
 					),
 				]);
-				if (audio) {
-					const voiceFile = `${id}-voiceover.mp3`;
-					await fs.writeFile(path.join(mediaDir(), voiceFile), audio);
-					voiceoverUrl = `${internal}/media/${voiceFile}`;
+				if (clips) {
+					voiceoverClips = {};
+					for (const clip of clips) {
+						const voiceFile = `${id}-voiceover-${clip.key}.mp3`;
+						await fs.writeFile(path.join(mediaDir(), voiceFile), clip.audio);
+						voiceoverClips[clip.key] = `${internal}/media/${voiceFile}`;
+					}
 				}
 			} catch (err) {
 				console.warn(`drop ${id}: voiceover skipped`, err);
@@ -172,7 +178,7 @@ export function createApp(deps: AppDeps) {
 				copy,
 				handle: input.handle,
 				template: input.template ?? 'brutal',
-				voiceoverUrl,
+				voiceoverClips,
 				// A public/ path, resolved by staticFile() inside the bundle.
 				musicUrl: track.file,
 				musicStartOffsetSeconds: track.startOffsetSeconds,

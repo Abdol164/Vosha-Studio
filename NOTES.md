@@ -215,15 +215,36 @@ without it.
 ElevenLabs. "Library" voices (incl. Tolani, Nigerian accent — would have been the better
 fit for pcg copy) need a paid plan/credits for API access (402 `paid_plan_required`); using
 free-tier "premade" voice Sarah instead (`EXAVITQu4vr4xnSDxMaL`) until/unless funded.
-Script is deliberately short (hook + first point + price + cta, not all 3 points) to fit
-the fixed 10s video without the `<Audio>` track running past the composition and getting
-cut off mid-sentence — placed unwrapped (not in a limited `Sequence`) so the composition's
-own 300-frame length does the clipping.
 
 Also observed: the copywriter's `lines` array occasionally comes back longer than
 `input.points` (zod `.max(3)` rejects it), triggering the existing retry-then-fallback
 path — working as designed (no crash, graceful fallback), just noting it's a real model
 behavior, not hypothetical.
+
+### Revision: per-beat clips instead of one continuous script
+Original version read hook→point→price→cta as one script starting at frame 0 — it
+finished narrating the price and CTA (which don't visually appear until ~7.5s and ~9s)
+only 2-4s into a 10s video. The audio and video told the story in completely different
+orders timing-wise. Fixed by generating one short clip per beat (`generateVoiceover` now
+takes `(copy, price)` and returns `VoiceoverClip[]`, one per `hook`/`point-N`/`price`/
+`cta`, run in parallel) and placing each inside its own `Sequence` (`VoiceoverTrack`
+component) at the same GLOBAL frame where that beat's visual reveal happens — both
+templates now share `remotion/templates/timeline.ts` for these frame offsets instead of
+each defining its own (that drift is exactly how audio/video mismatches like this one
+happen). `src/app.ts` writes one file per clip (`{id}-voiceover-{key}.mp3`) and passes a
+`voiceoverClips: Record<string,string>` map instead of a single `voiceoverUrl`.
+
+### Found while testing this: the ElevenLabs account is currently locked
+`401 detected_unusual_activity` — "Free Tier access has been disabled... triggered by
+using a proxy or VPN, or multiple free accounts." Near-certainly tripped by the volume of
+TTS calls made while building/testing today. This is almost certainly the real reason the
+first live mainnet test (MON-44) came back with no voiceover — not a missing env var as
+first assumed. Needs the account verified/restored or upgraded on ElevenLabs' side before
+voiceover works again; until then every drop silently falls back to music-only (by
+design — `render-local.ts` and `src/app.ts` both now catch this and log a warning rather
+than crashing or failing the drop). The sync fix above is implemented and type/unit-
+tested but **not yet audibly verified** — couldn't generate real audio to listen to once
+the account got locked mid-testing.
 
 ## Background music (`src/music.ts`)
 ElevenLabs' music-generation API also turned out to be paid-plan-only (402, confirmed by

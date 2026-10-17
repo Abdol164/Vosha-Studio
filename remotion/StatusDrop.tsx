@@ -4,15 +4,18 @@ import type {StatusDropProps} from './types';
 import {Brutal} from './templates/Brutal';
 import {Market} from './templates/Market';
 
-// photoUrl/voiceoverUrl are each either a remote http(s) URL (the server's generated
-// asset) or a public/ filename (local sample renders) — resolved to a servable URL here.
+// photoUrl/voiceover clips/musicUrl are each either a remote http(s) URL (the server's
+// generated asset) or a public/ filename (local sample renders) — resolved to a
+// servable URL here.
 const resolveAssetUrl = (url: string) => (/^https?:\/\//.test(url) ? url : staticFile(url));
 
 export const StatusDrop: React.FC<StatusDropProps> = (props) => {
 	const resolved = {
 		...props,
 		photoUrl: resolveAssetUrl(props.photoUrl),
-		voiceoverUrl: props.voiceoverUrl ? resolveAssetUrl(props.voiceoverUrl) : undefined,
+		voiceoverClips: props.voiceoverClips
+			? Object.fromEntries(Object.entries(props.voiceoverClips).map(([key, url]) => [key, resolveAssetUrl(url)]))
+			: undefined,
 		musicUrl: props.musicUrl ? resolveAssetUrl(props.musicUrl) : undefined,
 	};
 
