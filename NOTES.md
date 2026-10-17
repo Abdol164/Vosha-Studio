@@ -1,9 +1,33 @@
 # Build notes
 
 ## Scope cut for the 3pm deadline
-Dropped from tonight's MVP: background removal, HTML landing page, Bazaar discovery
-metadata. The `market` template was also cut originally but got built later once the
+Dropped from tonight's MVP: HTML landing page, Bazaar discovery metadata. The `market`
+template and background removal were also cut originally but got built later once the
 server/deploy/plugin work left real time before the actual 8pm EDT deadline — see below.
+
+## Background removal (`src/background-removal.ts`) — opt-in, OFF by default, and here's why
+`@imgly/background-removal-node`. Hit a real bug first: passing a raw `Buffer` makes the
+library wrap it in `new Blob([data])` with no MIME type, which its own format-sniffer then
+can't identify (`Unsupported format: ` — empty) and rejects outright. Fixed by wrapping it
+in a `Blob` with an explicit `type` ourselves before calling `removeBackground()`.
+
+Once that worked, measured the actual cost before deciding anything: **first call jumps
+RSS by ~1.1GB** (ONNX runtime init + loading the "small" ~40MB model) and takes ~2.4s;
+it's not a per-request leak — the next two calls in the same process only added ~4-12MB
+each and took ~2s (inference time, not loading) — but that ~1GB never comes back down for
+the life of the process once touched, even once. Given Tanta already hit an OOM on
+Brimble from bundling Remotion alone (a lighter load than this), adding a permanent ~1GB
+floor on top of whatever headless Chrome rendering needs is a measured, not theoretical,
+risk of crashing the live deploy.
+
+Built it as a real, working, opt-in feature rather than not building it: `AppDeps.
+removeBackground` is optional (`undefined` = skip entirely), wired in `server.ts` only
+when `BACKGROUND_REMOVAL_ENABLED=true` — off in `.env.example`, so a fresh deploy never
+gets this cost unless someone deliberately turns it on. **Recommend leaving it off on
+Brimble** unless/until the instance's actual memory ceiling is known and has real
+headroom above the render pipeline's own usage. The toggle means that's a one-line env
+var flip to test, not a code change — and just as fast to flip back off if it causes
+trouble.
 
 ## `market` template (`remotion/templates/Market.tsx`)
 Built later in the evening, once there was real time left before the actual deadline.

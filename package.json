@@ -14,6 +14,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
     "@elevenlabs/elevenlabs-js": "^2.73.0",
+    "@imgly/background-removal-node": "^1.4.5",
     "@remotion/bundler": "^4.0.536",
     "@remotion/cli": "^4.0.536",
     "@remotion/google-fonts": "^4.0.536",

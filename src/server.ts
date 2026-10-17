@@ -1,6 +1,7 @@
 // First: loads .env before any module reads process.env (queue.ts does at import).
 import './env.js';
 import {createApp} from './app.js';
+import {backgroundRemovalEnabled, removeProductBackground} from './background-removal.js';
 import {writeCopy} from './copywriter.js';
 import {fetchPhoto} from './image.js';
 import {pickRandomTrack} from './music.js';
@@ -21,10 +22,14 @@ console.log('Ensuring Chrome Headless Shell + bundling Remotion project...');
 // Bundle before listening so the first paid request never waits on (or fails in) the bundle.
 const render = await createRenderer();
 
+const backgroundRemoval = backgroundRemovalEnabled();
+console.log(`Background removal: ${backgroundRemoval ? 'enabled' : 'disabled'} (BACKGROUND_REMOVAL_ENABLED)`);
+
 const app = createApp({
 	fetchPhoto,
 	writeCopy,
 	generateVoiceover,
+	removeBackground: backgroundRemoval ? removeProductBackground : undefined,
 	pickTrack: pickRandomTrack,
 	render,
 	queue: renderQueue,

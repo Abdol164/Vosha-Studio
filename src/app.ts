@@ -17,6 +17,10 @@ export interface AppDeps {
 	fetchPhoto: typeof FetchPhotoFn;
 	writeCopy: typeof WriteCopyFn;
 	generateVoiceover: typeof GenerateVoiceoverFn;
+	// Opt-in (BACKGROUND_REMOVAL_ENABLED): undefined means skip it entirely, resolved by
+	// server.ts at startup so app.ts doesn't need to know about the env var. Returns null
+	// on failure — callers keep the original photo rather than failing the drop.
+	removeBackground?: (photo: Buffer, mimeType: 'image/jpeg' | 'image/png') => Promise<Buffer | null>;
 	pickTrack: () => MusicTrack;
 	render: RenderFn;
 	queue: RenderQueue;
@@ -134,6 +138,12 @@ export function createApp(deps: AppDeps) {
 					return;
 				}
 				throw err;
+			}
+			if (deps.removeBackground) {
+				const cutout = await deps.removeBackground(photo.data, photo.format === 'png' ? 'image/png' : 'image/jpeg');
+				if (cutout) {
+					photo = {...photo, data: cutout, format: 'png'};
+				}
 			}
 			const photoFile = `${id}-photo.${photo.format === 'png' ? 'png' : 'jpg'}`;
 			await fs.writeFile(path.join(mediaDir(), photoFile), photo.data);
