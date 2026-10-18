@@ -8,7 +8,7 @@ import {after, before, beforeEach, describe, test} from 'node:test';
 import type {DropCopy} from '../remotion/types.js';
 import {type AppDeps, createApp} from '../src/app.js';
 import {PhotoError} from '../src/image.js';
-import {RenderQueue} from '../src/queue.js';
+import {QueueFullError, RenderQueue} from '../src/queue.js';
 import {renderConcurrency} from '../src/render.js';
 import {ensureDataDirs, getDrop, mediaDir} from '../src/store.js';
 
@@ -77,6 +77,19 @@ function postDrop(body: unknown, raw = false) {
 		headers: {'content-type': 'application/json'},
 		body: raw ? (body as string) : JSON.stringify(body),
 	});
+}
+
+// POST /drop responds (and x402 settles, in the real app) on a fast 202 ack, before the
+// render starts (see src/drop-job.ts) -- so the eventual outcome is observed by polling the
+// record it updates, not by the HTTP response.
+async function waitForStatus(id: string, timeoutMs = 2000) {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const drop = await getDrop(id);
+		if (drop && drop.status !== 'rendering') return drop;
+		if (Date.now() > deadline) throw new Error(`drop ${id} still 'rendering' after ${timeoutMs}ms`);
+		await new Promise((r) => setTimeout(r, 20));
+	}
 }
 
 describe('GET routes', () => {
@@ -163,7 +176,7 @@ describe('POST /drop validation', () => {
 });
 
 describe('POST /drop flow', () => {
-	test('success returns URLs, saves a done record, and the page renders escaped', async () => {
+	test('accepts fast, renders async, saves a done record, and the page renders escaped', async () => {
 		let renderedPhotoUrl = '';
 		const inner = renderImpl;
 		renderImpl = async (id, props) => {
@@ -171,27 +184,26 @@ describe('POST /drop flow', () => {
 			return inner(id, props);
 		};
 		const res = await postDrop(VALID);
-		assert.equal(res.status, 200);
-		const body = await res.json();
-		assert.match(body.id, /^drp_/);
-		assert.equal(body.video_url, `https://drop.test/media/${body.id}.mp4`);
-		assert.equal(body.poster_url, `https://drop.test/media/${body.id}.jpg`);
-		assert.equal(body.page_url, `https://drop.test/d/${body.id}`);
-		assert.equal(body.caption, COPY.caption);
-		assert.equal(renderedPhotoUrl, `http://127.0.0.1:9/media/${body.id}-photo.jpg`);
+		assert.equal(res.status, 202);
+		const ack = await res.json();
+		assert.match(ack.id, /^drp_/);
+		assert.equal(ack.status, 'rendering');
+		assert.equal(ack.page_url, `https://drop.test/d/${ack.id}`);
 
-		const drop = await getDrop(body.id);
-		assert.equal(drop?.status, 'done');
-		assert.equal(drop?.video, `${body.id}.mp4`);
+		const drop = await waitForStatus(ack.id);
+		assert.equal(drop.status, 'done');
+		assert.equal(drop.video, `${ack.id}.mp4`);
+		assert.equal(drop.copy.caption, COPY.caption);
+		assert.equal(renderedPhotoUrl, `http://127.0.0.1:9/media/${ack.id}-photo.jpg`);
 
-		const page = await fetch(`${baseUrl}/d/${body.id}`);
+		const page = await fetch(`${baseUrl}/d/${ack.id}`, {headers: {accept: 'text/html'}});
 		assert.equal(page.status, 200);
 		const html = await page.text();
-		assert.ok(html.includes(`https://drop.test/media/${body.id}.mp4`));
+		assert.ok(html.includes(`https://drop.test/media/${ack.id}.mp4`));
 		assert.ok(!html.includes('<script>alert(1)</script>'));
 		assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
 
-		const media = await fetch(`${baseUrl}/media/${body.id}.mp4`);
+		const media = await fetch(`${baseUrl}/media/${ack.id}.mp4`);
 		assert.equal(await media.text(), 'mp4');
 	});
 
@@ -207,8 +219,9 @@ describe('POST /drop flow', () => {
 			return inner(id, p);
 		};
 		const res = await postDrop(VALID);
-		assert.equal(res.status, 200);
+		assert.equal(res.status, 202);
 		const {id} = await res.json();
+		await waitForStatus(id);
 		assert.equal(props?.voiceoverClips?.hook, `http://127.0.0.1:9/media/${id}-voiceover-hook.mp3`);
 		assert.equal(props?.voiceoverClips?.price, `http://127.0.0.1:9/media/${id}-voiceover-price.mp3`);
 		assert.equal(fs.readFileSync(path.join(mediaDir(), `${id}-voiceover-hook.mp3`), 'utf8'), 'mp3-hook');
@@ -227,42 +240,67 @@ describe('POST /drop flow', () => {
 			return inner(id, p);
 		};
 		const res = await postDrop(VALID);
-		assert.equal(res.status, 200);
+		assert.equal(res.status, 202);
+		const {id} = await res.json();
+		await waitForStatus(id);
 		assert.equal(props?.voiceoverClips, undefined);
 		assert.equal(props?.musicUrl, 'music/test.mp3');
 	});
 
-	test('photo errors map to 4xx with their code', async () => {
-		for (const [code, status] of [
-			['photo_invalid_url', 400],
-			['photo_blocked_host', 422],
-			['photo_too_large', 422],
-			['photo_timeout', 422],
-		] as const) {
+	// Was a synchronous 4xx before this fix: now the 202 ack has already gone out (and
+	// payment settled) by the time the photo is fetched, so a bad photo_url shows up as a
+	// failed record instead of an HTTP error. Intentional, documented behavior change (see
+	// NOTES.md) -- not a regression.
+	test('photo errors leave a failed record with the PhotoError code', async () => {
+		for (const code of ['photo_invalid_url', 'photo_blocked_host', 'photo_too_large', 'photo_timeout'] as const) {
 			fetchPhotoImpl = async () => {
 				throw new PhotoError(code, 'nope');
 			};
 			const res = await postDrop(VALID);
-			assert.equal(res.status, status, code);
-			assert.equal((await res.json()).error, code);
+			assert.equal(res.status, 202, code);
+			const {id} = await res.json();
+			const drop = await waitForStatus(id);
+			assert.equal(drop.status, 'failed', code);
+			assert.equal(drop.error, code);
 		}
 	});
 
-	test('render failure → 500 and a failed record, no media served', async () => {
-		let failedId = '';
+	test('render failure → fast 202, a failed record afterward, no media served', async () => {
 		renderImpl = async (id) => {
-			failedId = id;
 			throw new Error('chrome died');
 		};
 		const res = await postDrop(VALID);
-		assert.equal(res.status, 500);
-		assert.equal((await res.json()).error, 'render_failed');
-		const drop = await getDrop(failedId);
-		assert.equal(drop?.status, 'failed');
-		const page = await (await fetch(`${baseUrl}/d/${failedId}`)).text();
+		assert.equal(res.status, 202);
+		const {id} = await res.json();
+		const drop = await waitForStatus(id);
+		assert.equal(drop.status, 'failed');
+		assert.equal(drop.error, 'render_failed');
+		const page = await (await fetch(`${baseUrl}/d/${id}`, {headers: {accept: 'text/html'}})).text();
 		assert.match(page, /failed to render/);
+		const media = await fetch(`${baseUrl}/media/${id}.mp4`);
+		assert.equal(media.status, 404);
 	});
 
+	// New race window introduced by going async: rejectIfBusy's isFull() check (pre-payment)
+	// and the background job's queue.run() call (which actually claims a slot) are no longer
+	// back-to-back in the same tick -- photo fetch/copy/voiceover can all happen in between.
+	// A queue that was NOT full at accept time can be full by the time the job gets there,
+	// so a request that was already accepted (and settled, in the real app) still ends up
+	// failed, not busy. Documented, intentional trade-off -- see NOTES.md.
+	test('queue fills after accept → still a fast 202, but the record ends up queue_full', async () => {
+		queue = {isFull: () => false, run: () => Promise.reject(new QueueFullError()), stats: {}} as unknown as RenderQueue;
+		const res = await postDrop(VALID);
+		assert.equal(res.status, 202);
+		const {id} = await res.json();
+		const drop = await waitForStatus(id);
+		assert.equal(drop.status, 'failed');
+		assert.equal(drop.error, 'queue_full');
+	});
+
+	// Still synchronous: rejectIfBusy runs before any payment is taken, so a full queue is
+	// still refused immediately. "Before any photo fetch" is now trivially true in every
+	// case (photo fetch never happens synchronously anymore) but kept as the name since it's
+	// specifically testing that a busy queue is caught pre-payment, not just pre-render.
 	test('full queue → 503 before any photo fetch', async () => {
 		let fetched = false;
 		fetchPhotoImpl = async () => {
@@ -274,6 +312,35 @@ describe('POST /drop flow', () => {
 		assert.equal(res.status, 503);
 		assert.equal(res.headers.get('retry-after'), '60');
 		assert.equal(fetched, false);
+	});
+});
+
+describe('GET /d/:id content negotiation', () => {
+	test('no Accept header / Accept: */* → JSON', async () => {
+		const res = await postDrop(VALID);
+		const {id} = await res.json();
+		await waitForStatus(id);
+		const page = await fetch(`${baseUrl}/d/${id}`);
+		assert.match(page.headers.get('content-type') ?? '', /application\/json/);
+		const body = await page.json();
+		assert.equal(body.id, id);
+		assert.equal(body.status, 'done');
+		assert.match(body.video_url, /\/media\//);
+	});
+
+	test('Accept: text/html → the HTML page', async () => {
+		const res = await postDrop(VALID);
+		const {id} = await res.json();
+		await waitForStatus(id);
+		const page = await fetch(`${baseUrl}/d/${id}`, {headers: {accept: 'text/html'}});
+		assert.match(page.headers.get('content-type') ?? '', /text\/html/);
+	});
+
+	test('unknown id with no Accept header → JSON 404', async () => {
+		const res = await fetch(`${baseUrl}/d/drp_aaaaaaaa`);
+		assert.equal(res.status, 404);
+		assert.match(res.headers.get('content-type') ?? '', /application\/json/);
+		assert.equal((await res.json()).error, 'not_found');
 	});
 });
 

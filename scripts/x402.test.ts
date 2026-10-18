@@ -11,7 +11,7 @@ import express from 'express';
 import {generatePrivateKey, privateKeyToAccount} from 'viem/accounts';
 import {type AppDeps, createApp} from '../src/app.js';
 import {RenderQueue} from '../src/queue.js';
-import {ensureDataDirs, mediaDir} from '../src/store.js';
+import {type DropRecord, ensureDataDirs, getDrop, mediaDir} from '../src/store.js';
 import {hasBody} from '../src/validate-paid.js';
 import {NETWORKS, createPaidMiddleware, usdToAtomic, x402ConfigFromEnv} from '../src/x402.js';
 
@@ -99,6 +99,19 @@ const post = (f: typeof fetch, body?: unknown) =>
 		body: body === undefined ? undefined : JSON.stringify(body),
 	});
 
+// POST /drop now settles on a fast 202 ack, before the render even starts (see
+// src/drop-job.ts) -- so "did the render succeed" is observed by polling the record it
+// updates, not by the HTTP response.
+async function waitForStatus(id: string, timeoutMs = 2000): Promise<DropRecord> {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const drop = await getDrop(id);
+		if (drop && drop.status !== 'rendering') return drop;
+		if (Date.now() > deadline) throw new Error(`drop ${id} still 'rendering' after ${timeoutMs}ms`);
+		await new Promise((r) => setTimeout(r, 20));
+	}
+}
+
 describe('x402 ordering (spec §6.3)', () => {
 	test('(1) bodyless POST → 402 with our payment requirements', async () => {
 		const res = await post(fetch);
@@ -149,60 +162,43 @@ describe('x402 ordering (spec §6.3)', () => {
 		assert.equal(calls.settle, 0);
 	});
 
-	test('(3) render failure → 500 and no settlement', async () => {
+	test('(3) render failure → settles anyway (fast ack already happened), record ends up failed', async () => {
 		renderImpl = async () => {
 			throw new Error('chrome died');
 		};
 		const res = await post(payingFetch, VALID);
-		assert.equal(res.status, 500);
+		assert.equal(res.status, 202);
 		assert.equal(calls.verify, 1);
-		assert.equal(calls.settle, 0);
+		assert.equal(calls.settle, 1);
+		const {id} = (await res.json()) as {id: string};
+		const drop = await waitForStatus(id);
+		assert.equal(drop.status, 'failed');
+		assert.equal(drop.error, 'render_failed');
 	});
 
-	test('client disconnects mid-render → render finishes but nothing is settled', async () => {
-		let renderStarted!: () => void;
-		const started = new Promise<void>((r) => (renderStarted = r));
-		let finishRender!: () => void;
-		const finished = new Promise<void>((r) => (finishRender = r));
-		let renderDone!: () => void;
-		const done = new Promise<void>((r) => (renderDone = r));
-		const inner = renderImpl;
-		renderImpl = async (id, props) => {
-			renderStarted();
-			await finished;
-			try {
-				return await inner(id, props);
-			} finally {
-				setImmediate(renderDone);
-			}
-		};
-		const abort = new AbortController();
-		const abortable: typeof fetch = (input, init) => {
-			const req = new Request(input, init);
-			return fetch(req.headers.has('payment-signature') ? new Request(req, {signal: abort.signal}) : req);
-		};
-		const f = wrapFetchWithPaymentFromConfig(abortable, {
-			schemes: [{network: 'eip155:84532', client: new ExactEvmScheme(privateKeyToAccount(generatePrivateKey()))}],
-		});
-		const pending = post(f, VALID).catch((err: Error) => err);
-		await started;
-		abort.abort();
-		assert.ok((await pending) instanceof Error);
-		await new Promise((r) => setTimeout(r, 50));
-		finishRender();
-		await done;
-		await new Promise((r) => setTimeout(r, 100));
-		assert.equal(calls.verify, 1);
-		assert.equal(calls.settle, 0);
-	});
+	// The old version of this test (client disconnects while the render is still running)
+	// no longer applies: settlement now happens on the fast 202 ack, before the render even
+	// starts, so there's nothing left running that a disconnect could race against. The
+	// disconnect-before-the-ack window still matters (see the clientGone guard in
+	// src/app.ts) but it's a sub-millisecond race around one local fs write with no
+	// injectable seam in AppDeps to test deterministically -- an accepted coverage gap.
 
-	test('paid valid request → 200, settled once, with a PAYMENT-RESPONSE header', async () => {
+	test('paid valid request → fast 202 ack, settled immediately, record finishes "done" afterward', async () => {
 		const res = await post(payingFetch, VALID);
-		assert.equal(res.status, 200);
-		assert.match((await res.json()).video_url, /^https:\/\/drop\.test\/media\/drp_/);
+		assert.equal(res.status, 202);
+		const body = (await res.json()) as {id: string; status: string; page_url: string};
+		assert.match(body.id, /^drp_/);
+		assert.equal(body.status, 'rendering');
+		assert.equal(body.page_url, `https://drop.test/d/${body.id}`);
+		// Settlement is synchronous with this response, not deferred until the render finishes.
 		assert.equal(calls.verify, 1);
 		assert.equal(calls.settle, 1);
 		assert.ok(res.headers.get('payment-response'));
+
+		const drop = await waitForStatus(body.id);
+		assert.equal(drop.status, 'done');
+		assert.match(drop.video ?? '', /^drp_/);
+		assert.match(drop.poster ?? '', /^drp_/);
 	});
 });
 

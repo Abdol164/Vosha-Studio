@@ -1,17 +1,16 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import {randomBytes} from 'node:crypto';
 import express, {type ErrorRequestHandler, type RequestHandler} from 'express';
-import type {StatusDropProps} from '../remotion/types.js';
+import type {DropCopy, StatusDropProps} from '../remotion/types.js';
 import type {writeCopy as WriteCopyFn} from './copywriter.js';
+import {runDropJob} from './drop-job.js';
 import type {MusicTrack} from './music.js';
-import {PhotoError, type fetchPhoto as FetchPhotoFn} from './image.js';
+import type {fetchPhoto as FetchPhotoFn} from './image.js';
 import {logger, safeHeaders} from './log.js';
 import {dropPage, homePage, notFoundPage} from './page.js';
-import {QueueFullError, type RenderQueue} from './queue.js';
+import type {RenderQueue} from './queue.js';
 import type {RenderFn} from './render.js';
 import type {DropRequest} from './schema.js';
-import {type DropRecord, getDrop, isDropId, mediaDir, newDropId, saveDrop, updateDrop} from './store.js';
+import {type DropRecord, getDrop, isDropId, mediaDir, newDropId, saveDrop} from './store.js';
 import {validatePaid} from './validate-paid.js';
 import type {generateVoiceover as GenerateVoiceoverFn} from './voiceover.js';
 
@@ -40,16 +39,6 @@ export const TEMPLATES = [
 	{id: 'brutal', name: 'Brutal', description: 'Black/white/red high-contrast type, hard cuts.', available: true},
 	{id: 'market', name: 'Market', description: 'Loud yellow/green/red, rotated stickers, price starburst.', available: true},
 ] as const;
-
-// invalid_url is the caller's input being wrong; the rest mean the URL was fine
-// syntactically but what's behind it can't be used.
-function photoErrorStatus(err: PhotoError): number {
-	return err.code === 'photo_invalid_url' ? 400 : 422;
-}
-
-// ElevenLabs is optional garnish: past this, the drop renders without a voiceover rather
-// than holding a paid request (and the payer's authorization window) hostage.
-const VOICEOVER_TIMEOUT_MS = 15_000;
 
 function sendError(res: express.Response, status: number, error: string, message: string, extra: object = {}) {
 	// `code`, not `error`: Brimble flags any line containing "error" as ERROR, and a 404 is not one.
@@ -140,14 +129,36 @@ export function createApp(deps: AppDeps) {
 		res.type('html').send(homePage());
 	});
 
+	function dropStatusJson(drop: DropRecord) {
+		const common = {id: drop.id, status: drop.status, page_url: `${base}/d/${drop.id}`, created_at: drop.createdAt, updated_at: drop.updatedAt};
+		if (drop.status === 'done' && drop.video) {
+			return {...common, video_url: mediaUrl(drop.video), poster_url: drop.poster ? mediaUrl(drop.poster) : null, caption: drop.copy.caption, hashtags: drop.copy.hashtags};
+		}
+		if (drop.status === 'failed') {
+			return {...common, error: drop.error ?? 'render_failed'};
+		}
+		return {...common, poll_after_seconds: 5};
+	}
+
+	// Scripts/agents polling for a result get JSON by default (no Accept header, or
+	// Accept: */*); only a request that actually prefers text/html gets the human page.
 	app.get('/d/:id', async (req, res, next) => {
 		try {
 			const drop = isDropId(req.params.id) ? await getDrop(req.params.id) : null;
+			const wantsHtml = req.accepts(['json', 'html']) === 'html';
 			if (!drop) {
-				res.status(404).type('html').send(notFoundPage());
+				if (wantsHtml) {
+					res.status(404).type('html').send(notFoundPage());
+				} else {
+					res.status(404).json({error: 'not_found', message: 'No such drop.'});
+				}
 				return;
 			}
-			res.type('html').send(dropPage(drop, mediaUrl));
+			if (wantsHtml) {
+				res.type('html').send(dropPage(drop, mediaUrl));
+				return;
+			}
+			res.json(dropStatusJson(drop));
 		} catch (err) {
 			next(err);
 		}
@@ -167,12 +178,16 @@ export function createApp(deps: AppDeps) {
 		next();
 	};
 
+	// Fast path only: validate, create the record, respond, settle. Everything slow (photo
+	// fetch, AI copy, voiceover, the render itself) happens afterward in runDropJob -- see
+	// src/drop-job.ts for why: PayBox's own client times out long before a 15-60s render
+	// finishes, and settlement is driven entirely by how fast *this* handler responds.
 	const handleDrop: RequestHandler = async (_req, res, next) => {
 		const reqId = res.locals.reqId as string;
 		const t0 = Date.now();
-		const since = () => Date.now() - t0;
-		// x402 settles any < 400 response, even one nobody is left to receive. If the
-		// caller gives up mid-render we must answer >= 400 so they aren't charged for it.
+		// x402 settles any < 400 response, even one nobody is left to receive. The only
+		// await left on this path is saveDrop below, but the guard still earns its keep for
+		// that brief window.
 		let clientGone = false;
 		res.on('close', () => {
 			if (!res.writableFinished) clientGone = true;
@@ -194,114 +209,56 @@ export function createApp(deps: AppDeps) {
 			queue: deps.queue.stats,
 		});
 		try {
-			let photo;
-			try {
-				photo = await deps.fetchPhoto(input.photo_url);
-				logger.info('drop.photo', {req: reqId, drop: id, ms: since(), format: photo.format, width: photo.width, height: photo.height, bytes: photo.data.length});
-			} catch (err) {
-				if (err instanceof PhotoError) {
-					sendError(res, photoErrorStatus(err), err.code, err.message);
-					return;
-				}
-				throw err;
-			}
-			if (deps.removeBackground) {
-				const cutout = await deps.removeBackground(photo.data, photo.format === 'png' ? 'image/png' : 'image/jpeg');
-				logger.info('drop.background_removal', {req: reqId, drop: id, ms: since(), ok: Boolean(cutout)});
-				if (cutout) {
-					photo = {...photo, data: cutout, format: 'png'};
-				}
-			}
-			const photoFile = `${id}-photo.${photo.format === 'png' ? 'png' : 'jpg'}`;
-			await fs.writeFile(path.join(mediaDir(), photoFile), photo.data);
-
-			const copy = await deps.writeCopy({
-				productName: input.product_name,
-				price: input.price,
-				points: input.points,
-				language: input.language,
-				cta: input.cta,
-			});
-			logger.info('drop.copy', {req: reqId, drop: id, ms: since(), hook: copy.hook, lines: copy.lines.length});
-			// Voiceover failures never fail the drop (same idea as the copywriter fallback).
-			// One clip per story beat (hook/point/price/cta) rather than one long clip from
-			// frame 0, so narration lands when its beat actually appears on screen — see
-			// VoiceoverTrack in Brutal.tsx/Market.tsx.
-			let voiceoverClips: Record<string, string> | undefined;
-			try {
-				const clips = await Promise.race([
-					deps.generateVoiceover(copy, input.price),
-					new Promise<null>((_, reject) =>
-						setTimeout(() => reject(new Error('voiceover timed out')), VOICEOVER_TIMEOUT_MS).unref(),
-					),
-				]);
-				if (clips) {
-					voiceoverClips = {};
-					for (const clip of clips) {
-						const voiceFile = `${id}-voiceover-${clip.key}.mp3`;
-						await fs.writeFile(path.join(mediaDir(), voiceFile), clip.audio);
-						voiceoverClips[clip.key] = `${internal}/media/${voiceFile}`;
-					}
-				}
-				logger.info('drop.voiceover', {req: reqId, drop: id, ms: since(), clips: voiceoverClips ? Object.keys(voiceoverClips) : []});
-			} catch (err) {
-				logger.warn('drop.voiceover_skipped', {req: reqId, drop: id, ms: since(), error: err});
-			}
-			const track = deps.pickTrack();
-
+			// Placeholder props/copy: real values land once runDropJob fetches the photo and
+			// writes copy. dropPage()'s 'rendering' branch only reads productName/price (both
+			// real, from input) before falling back to a generic "still rendering" message, so
+			// these placeholders are never actually shown to anyone. `lines: input.points`
+			// satisfies dropCopySchema's min(1).max(3) for free, since points already passed
+			// that same bound in dropRequestSchema.
+			const placeholderCopy: DropCopy = {hook: '', lines: input.points, cta: input.cta ?? '', caption: '', hashtags: []};
 			const props: StatusDropProps = {
 				productName: input.product_name,
 				price: input.price,
-				photoUrl: `${internal}/media/${photoFile}`,
+				photoUrl: '',
 				points: input.points,
-				copy,
+				copy: placeholderCopy,
 				handle: input.handle,
 				template: input.template ?? 'brutal',
-				voiceoverClips,
-				// A public/ path, resolved by staticFile() inside the bundle.
-				musicUrl: track.file,
-				musicStartOffsetSeconds: track.startOffsetSeconds,
 			};
 			const now = new Date().toISOString();
-			const record: DropRecord = {id, status: 'rendering', createdAt: now, updatedAt: now, props, copy};
+			const record: DropRecord = {id, status: 'rendering', createdAt: now, updatedAt: now, props, copy: placeholderCopy};
 			await saveDrop(record);
 
-			let result;
-			logger.info('drop.render_queued', {req: reqId, drop: id, ms: since(), queue: deps.queue.stats});
-			try {
-				result = await deps.queue.run(() => {
-					logger.info('drop.render_start', {req: reqId, drop: id, ms: since()});
-					return deps.render(id, props);
-				});
-				logger.info('drop.render_done', {req: reqId, drop: id, ms: since()});
-			} catch (err) {
-				const busy = err instanceof QueueFullError;
-				await updateDrop(id, {status: 'failed', error: busy ? 'queue_full' : String(err)});
-				if (busy) {
-					res.set('Retry-After', '60');
-					sendError(res, 503, 'busy', 'Render queue is full, try again in a minute.');
-				} else {
-					logger.error('drop.render_failed', {req: reqId, drop: id, ms: since(), error: err});
-					sendError(res, 500, 'render_failed', 'Video render failed.');
-				}
+			if (clientGone) {
+				logger.warn('drop.client_gone', {req: reqId, drop: id, ms: Date.now() - t0, note: 'client disconnected before the ack; answering 499 so x402 does not settle'});
+				sendError(res, 499, 'client_closed', 'Client disconnected before the request was accepted.');
 				return;
 			}
 
-			await updateDrop(id, {status: 'done', video: result.video, poster: result.poster});
-			if (clientGone) {
-				logger.warn('drop.client_gone', {req: reqId, drop: id, ms: since(), note: 'rendered after the client disconnected; answering 499 so x402 does not settle'});
-				sendError(res, 499, 'client_closed', 'Client disconnected before the render finished.');
-				return;
-			}
-			logger.info('drop.done', {req: reqId, drop: id, ms: since()});
-			res.json({
+			logger.info('drop.accepted', {req: reqId, drop: id, ms: Date.now() - t0});
+			res.status(202).json({
 				id,
-				video_url: mediaUrl(result.video),
-				poster_url: mediaUrl(result.poster),
+				status: 'rendering',
 				page_url: `${base}/d/${id}`,
-				caption: copy.caption,
-				hashtags: copy.hashtags,
+				poll_after_seconds: 5,
+				message: 'Vosha Studio is generating your video. GET page_url (send Accept: application/json for a machine-readable status) once status is "done" for the video, poster, caption and hashtags.',
 			});
+
+			void runDropJob(
+				{
+					fetchPhoto: deps.fetchPhoto,
+					writeCopy: deps.writeCopy,
+					generateVoiceover: deps.generateVoiceover,
+					removeBackground: deps.removeBackground,
+					pickTrack: deps.pickTrack,
+					render: deps.render,
+					queue: deps.queue,
+					internalBaseUrl: internal,
+				},
+				id,
+				input,
+				reqId,
+			);
 		} catch (err) {
 			next(err);
 		}

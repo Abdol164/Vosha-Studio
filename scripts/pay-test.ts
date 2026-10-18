@@ -74,14 +74,28 @@ const post = (f: typeof fetch, body?: unknown) =>
 		body: body === undefined ? undefined : JSON.stringify(body),
 	});
 
-async function waitForBalanceBelow(start: bigint, timeoutMs = 30_000): Promise<bigint> {
+async function waitForBalanceBelow(start: bigint, timeoutMs = 10_000): Promise<bigint> {
 	const deadline = Date.now() + timeoutMs;
 	let now = await balance();
 	while (now >= start && Date.now() < deadline) {
-		await new Promise((r) => setTimeout(r, 2_000));
+		await new Promise((r) => setTimeout(r, 1_000));
 		now = await balance();
 	}
 	return now;
+}
+
+// POST /drop now settles on a fast ack, before the video renders (see src/drop-job.ts) --
+// the result shows up later at page_url. Bounded generously since a render can still take
+// 15-60s+; the point of this fix was shrinking the *response* time, not the render time.
+async function waitForDone(pageUrl: string, timeoutMs = 120_000): Promise<Record<string, unknown>> {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const res = await fetch(pageUrl, {headers: {accept: 'application/json'}});
+		const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+		if (body.status === 'done' || body.status === 'failed') return body;
+		if (Date.now() > deadline) throw new Error(`${pageUrl} still "${body.status}" after ${timeoutMs}ms`);
+		await new Promise((r) => setTimeout(r, 3_000));
+	}
 }
 
 console.log(`Target ${baseUrl}  network ${net.network}  payer ${account.address}`);
@@ -116,26 +130,39 @@ console.log(`Payer balance: ${usdc(start)}\n`);
 	check('(b) no USDC moved', after === start, `${usdc(start)} → ${usdc(after)}`);
 }
 
-// (c) paid valid → 200, URLs work, exactly one charge
+// (c) paid valid → fast 202 ack, settles near-instantly, then the result shows up at
+// page_url once the (still slow) render finishes. exactly one charge throughout.
 {
 	const {f} = payingFetch();
 	const t0 = Date.now();
 	const res = await post(f, BODY);
-	const body = (await res.json().catch(() => ({}))) as Record<string, string>;
-	check('(c) paid valid POST → 200', res.status === 200, `got ${res.status} in ${Math.round((Date.now() - t0) / 1000)}s`);
-	console.log(`      ${JSON.stringify(body)}`);
+	const ackMs = Date.now() - t0;
+	const ack = (await res.json().catch(() => ({}))) as Record<string, string>;
+	check('(c) paid valid POST → 202', res.status === 202, `got ${res.status} in ${ackMs}ms`);
+	console.log(`      ack ${JSON.stringify(ack)}`);
 	const receipt = res.headers.get('payment-response');
 	if (receipt) {
 		const settle = JSON.parse(Buffer.from(receipt, 'base64').toString('utf8'));
 		console.log(`      tx ${settle.transaction}`);
 	}
-	for (const k of ['video_url', 'poster_url', 'page_url']) {
-		const url = body[k];
-		const r = url ? await fetch(url, {method: 'GET'}) : null;
-		check(`(c) ${k} loads`, r?.status === 200, url ?? 'missing');
+
+	// The whole point of this fix: settlement should trail the response by milliseconds,
+	// not by however long the render takes.
+	const balanceT0 = Date.now();
+	const afterAck = await waitForBalanceBelow(start);
+	check('(c) payer was charged shortly after the ack', afterAck < start, `${usdc(start)} → ${usdc(afterAck)} (confirmed ${Date.now() - balanceT0}ms after the ack)`);
+
+	if (ack.page_url) {
+		const result = await waitForDone(ack.page_url);
+		check('(c) render finished', result.status === 'done', `status: ${result.status}, error: ${result.error ?? 'none'}`);
+		for (const k of ['video_url', 'poster_url', 'page_url']) {
+			const url = result[k] as string | undefined;
+			const r = url ? await fetch(url, {method: 'GET'}) : null;
+			check(`(c) ${k} loads`, r?.status === 200, url ?? 'missing');
+		}
+	} else {
+		check('(c) page_url present in ack', false, JSON.stringify(ack));
 	}
-	const after = await waitForBalanceBelow(start);
-	check('(c) payer was charged', after < start, `${usdc(start)} → ${usdc(after)}`);
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');

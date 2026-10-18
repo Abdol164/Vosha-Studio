@@ -40,8 +40,11 @@ function createServer() {
 			description:
 				"Proposes an x402 payment (0.25 USDC on Base) to Vosha Studio, which turns a product photo, " +
 				"price, and up to 3 selling points into a 10-second vertical promo video (MP4) with an " +
-				"AI-written caption in English, Nigerian Pidgin, or Yoruba. PayBox pays and fetches the " +
-				"result after approval; poll the request for the video/poster/page URLs.",
+				"AI-written caption in English, Nigerian Pidgin, or Yoruba. Once PayBox approves and pays, " +
+				"the call returns immediately with an id and page_url -- the video is still generating at " +
+				"that point (usually ready within a minute, occasionally longer). Fetch page_url afterward " +
+				"(send Accept: application/json for a machine-readable {status, video_url, poster_url, " +
+				"caption, hashtags}; status is \"rendering\", \"done\", or \"failed\") to get the result.",
 			inputSchema: dropInputSchema,
 			outputSchema: x402OutputSchema,
 			annotations: {

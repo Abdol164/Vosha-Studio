@@ -159,13 +159,18 @@ pre-payment check; `run()` re-checks because two requests can race for the last 
 ## Server routes (`src/app.ts`, MON-36)
 `createApp(deps)` holds every route; `src/server.ts` only reads env, runs `ensureBrowser()` +
 the Remotion bundle once, then listens. Choices to check against spec §6 (not in the repo):
-- **`POST /drop` is synchronous**: the 200 is sent only after the render finishes (~25s
-  locally for 10s of video). That keeps "render failure → no settlement" simple, but PayBox's
-  fetch timeout must allow for it, plus queue wait when busy. Unknown so far.
-- **Response**: `{id, video_url, poster_url, page_url, caption, hashtags}`. Errors are
-  `{error: <code>, message}` (+ `issues` on 400). Status codes: 400 schema/bad JSON/
-  `photo_invalid_url`; 413 body > 16kb; 422 other `photo_*` codes; 503 + `Retry-After: 60`
-  when the queue is full; 500 `render_failed`.
+- **`POST /drop` is async since MON-45** (see "Decoupling settlement from the render" below):
+  it validates, creates the record, and responds `202` immediately -- photo fetch, AI copy,
+  voiceover and the render all happen afterward in `src/drop-job.ts`. This used to be
+  synchronous (200 only after the render finished, ~25s locally); that was the whole problem.
+- **Fast-ack response**: `202 {id, status: 'rendering', page_url, poll_after_seconds,
+  message}`. Fetch `page_url` afterward for the result -- `Accept: application/html` gets the
+  human page, anything else (including no `Accept` header) gets JSON:
+  `{id, status, page_url, video_url?, poster_url?, caption?, hashtags?, error?}` where
+  `status` is `rendering`/`done`/`failed`. Errors on the initial `POST` are still
+  `{error: <code>, message}` (+ `issues` on 400). Status codes: 400 schema/bad JSON; 413 body
+  > 16kb; 503 + `Retry-After: 60` when the queue is full (pre-payment only -- see the
+  `queue_full` trade-off below for what happens if it fills up after accept).
 - `photo_url` must be https (the plugin schema accepts any URL).
 - The processed photo is saved as `media/<id>-photo.{jpg,png}`, and the renderer loads it
   from `http://127.0.0.1:$PORT/media/...` instead of `PUBLIC_BASE_URL`, so renders don't
@@ -177,14 +182,19 @@ the Remotion bundle once, then listens. Choices to check against spec §6 (not i
   (`npx remotion browser ensure`) so a container never downloads it at runtime.
 
 ## x402 (`src/x402.ts`, `src/validate-paid.ts`, MON-39/40/43)
-**Settlement finding (spec §6.3 rule 3), from reading `@x402/express` 2.28.0 source:** no
-restructuring needed. For the `exact` EVM scheme the payment flow is "authorization": verify
-*before* the handler, settle *after*. The middleware buffers everything the handler writes;
-if the final status is >= 400, or the handler throws, it cancels settlement and sends the
-error response unchanged. Only a < 400 response triggers `/settle`, and the buffered body is
-released only after settlement succeeds (a failed settle becomes a 402 and the video URLs are
-never sent). That holds because `/drop` renders inside the request (see the synchronous note
-above). Making `/drop` async would break it, so don't.
+**Settlement finding (spec §6.3 rule 3), from reading `@x402/express` 2.28.0 source:** for the
+`exact` EVM scheme the payment flow is "authorization": verify *before* the handler, settle
+*after*. The middleware buffers everything the handler writes; if the final status is >= 400,
+or the handler throws, it cancels settlement and sends the error response unchanged. Only a
+< 400 response triggers `/settle`, and the buffered body is released only after settlement
+succeeds. Settlement is driven purely by what `handleDrop` responds and how fast -- `src/x402.ts`
+itself needed zero changes for the MON-45 fix below, we just made the handler respond fast.
+
+~~Making `/drop` async would break it, so don't~~ -- **reversed as of MON-45**: `/drop` *is*
+now async (see "Decoupling settlement from the render"), specifically because the old
+"renders inside the request" assumption was the root cause of PayBox's client giving up
+before a slow render finished. Settling on the fast ack rather than the final result is the
+whole point of that fix.
 
 Middleware order on `/drop`: `express.json` → `validatePaid` → busy check (503) → x402 →
 handler.
@@ -192,11 +202,15 @@ handler.
    that somehow arrives bodyless gets a 400 from the handler, so it isn't settled.
 2. A body that fails the schema → 400 from `validatePaid`, before x402 runs at all (no
    `/verify`, no `/settle`). Tested with a real signed payment header (`scripts/x402.test.ts`).
-3. Render failure → 500 → settlement cancelled. Tested.
-4. **Found while testing:** @x402/express settles any < 400 response even if the client has
-   already disconnected, so a caller who gave up mid-render (timeout) would still be charged.
-   `handleDrop` watches `res` for `close` and answers 499 `client_closed` in that case, which
-   cancels settlement. There's a test for it, and it fails with the guard removed.
+3. **Changed by MON-45**: a render failure no longer cancels settlement -- by the time the
+   render runs, the fast ack has already settled payment. A render failure now just leaves
+   the `DropRecord` as `status: 'failed'` instead of un-settling anything. Tested.
+4. **Found while testing (pre-MON-45):** @x402/express settles any < 400 response even if the
+   client has already disconnected, so a caller who gave up before our response arrived would
+   still be charged. `handleDrop` watches `res` for `close` and answers 499 `client_closed` in
+   that case, which cancels settlement. Still true post-MON-45, just guarding a much smaller
+   window now (one local `fs` write, not a 15-60s render) -- see MON-45 section for why that
+   window is no longer practically testable.
 
 Config:
 - `X402_NETWORK=base-sepolia` → `eip155:84532`, USDC `0x036C…dCF7e`; `base` → `eip155:8453`,
@@ -330,9 +344,97 @@ with 204 + `Access-Control-Allow-Origin: *`, and setting `Access-Control-Expose-
 Payment-Required, Payment-Response` on every response (those two custom headers are
 otherwise invisible to cross-origin JS even once the request itself is allowed through).
 Verified locally: preflight now returns 204 with the right headers, and the 402 response
-carries them too. **Needs a Brimble redeploy to take effect live** — this is a hypothesis
-backed by a verified gap (prod literally had no CORS headers), not a confirmed fix, since
-PayBox's exact client-side behavior isn't ours to inspect.
+carries them too.
+
+**Update, same day:** confirmed wrong guess. PayBox's own developer docs make clear the
+payment retry to `/drop` is server-to-server (PayBox's backend, not the end user's browser),
+so CORS was never in that path. The widget-not-rendering report and the "could not read a
+complete response" error turned out to be the same underlying cause — see "Decoupling
+settlement from the render" below. Keeping this fix (it's a real gap, harmless, and CORS
+would matter if PayBox's flow ever does involve a browser call) but it did not fix the
+actual reported symptom.
+
+### Decoupling settlement from the render (MON-45)
+**Root cause of "PayBox could not read a complete response from this service," recurring
+even after the CORS fix above and the render-concurrency fix:** `POST /drop` verified the
+payment, then did *everything* -- fetch the photo, call an LLM for ad copy, optionally
+generate TTS, render a ~10s video via Remotion + headless Chrome (15-60+ seconds measured
+live) -- and only settled payment and responded after all of that finished, all inside one
+synchronous HTTP request/response cycle. PayBox's backend client almost certainly has its own
+response timeout, shorter than that, and gives up -- even though our x402 verify/settle logic
+(§6.3) was always correctly implemented and the payment genuinely did settle on-chain.
+
+**Evidence**, gathered by reading PayBox's actual developer docs rather than guessing again:
+- `developer.paybox.sh/requirements.md` (the real PayBox plugin developer guide -- not
+  `docs.paybox.sh`, which is about *using* PayBox, not building a resource server) and every
+  timeout PayBox publishes anywhere cluster at 4-10 seconds: a hard 10s budget for hosted MCP
+  sandbox operations, a recommended 4s bounded fetch for the plugin's own outbound calls.
+- A reference x402 resource server built by another Chapter 1 hackathon participant
+  (`github.com/Exoticdevelopment/paybox-tribunal`, against the same starter kit, confirmed
+  byte-identical `paybox.ts`) finishes its paid work in well under a couple of seconds, same
+  as every other example PayBox ships. Nothing in this ecosystem holds a connection open for
+  15-60s like ours did.
+- The x402 Foundation spec (canonical README) mandates the order verify → do the work →
+  settle → respond -- so our *ordering* was always compliant -- but is silent on time
+  budgets, meaning PayBox's own undocumented client timeout is the real binding constraint.
+- PayBox's own spec language explicitly sanctions decoupling: *"a service failure does not
+  necessarily mean payment failed: inspect both before retrying,"* *"poll the returned
+  request ID; do not run the plugin again to finish payment,"* *"an agent may pass the paid
+  response into a subsequent plugin call."*
+- Traced `@x402/express`'s actual source (`node_modules/@x402/express/dist/esm/index.mjs`):
+  it buffers the handler's response and checks `res.statusCode` only once the handler calls
+  `res.end()`. Settlement timing is driven purely by how fast *our own handler* responds --
+  confirming no change was needed in `src/x402.ts`, only in how fast `handleDrop` returns.
+
+**The fix:** `POST /drop` now does nothing beyond validating the body and creating a
+`DropRecord` before responding `202 {id, status: 'rendering', page_url, poll_after_seconds,
+message}` -- which settles payment immediately. Photo fetch, AI copy, voiceover, and the
+render all happen afterward in the new `src/drop-job.ts` (`runDropJob`), fired with `void`
+(never awaited) so the response goes out first. `GET /d/:id` now content-negotiates: `Accept:
+text/html` gets the existing human page (unchanged, it already self-refreshed on `status:
+'rendering'` and showed the finished video on `'done'` -- built before this fix, needed zero
+changes), anything else (including no `Accept` header, so scripts/agents get this by
+default) gets JSON `{id, status, page_url, video_url?, poster_url?, caption?, hashtags?,
+error?}`.
+
+**Explicit, accepted trade-off:** because settlement now precedes photo-fetch/copy/render, a
+caller is charged even when the photo URL is bad, the copywriter LLM/TTS fails, or Remotion
+crashes -- cases that previously cancelled settlement. There is no refund mechanism. This was
+discussed and confirmed with Abdol before implementing (full-async was chosen over two
+cheaper-but-slower alternatives that kept photo-fetch and/or copy synchronous specifically to
+catch those failures for free) -- it matches PayBox's own "service failure ≠ payment failure"
+guidance, and obviously malformed requests are still rejected for free, before payment, via
+the existing `validatePaid` schema check (unchanged). A new trade-off this introduces: the
+render queue can fill *after* a request is accepted and settled (previously `rejectIfBusy`'s
+pre-payment check and the render's `queue.run()` call were back-to-back in the same request;
+now photo-fetch/copy/voiceover can run in between) -- a settled drop can still end up
+`status: 'failed', error: 'queue_full'`. Tested (`scripts/server.test.ts`), not hypothetical.
+
+**DropRecord.error is now a closed type** (`DropErrorCode` in `src/store.ts`:
+`PhotoErrorCode | 'queue_full' | 'render_failed' | 'internal_error'`) rather than free text,
+since it's exposed externally via the JSON status endpoint for the first time -- raw
+exception detail stays in the logs only.
+
+**Not yet confirmed live:**
+1. PayBox's actual client timeout is still unmeasured -- everything above is strong
+   circumstantial evidence (docs, reference implementations, the spec), not a confirmed
+   number. The real test is a live E2E after this deploys.
+2. Whether PayBox's client treats `202` identically to `200`. Protocol-level tooling
+   (`@x402/fetch`, `@x402/express`) doesn't care -- confirmed by reading their source, only
+   `402` is special-cased, everything else passes through untouched -- but PayBox's own
+   backend client is closed-source and untested against anything but `200` so far. If `202`
+   turns out to be a problem, it's a one-line change to `200` in `src/app.ts`.
+3. Couldn't run `pay-test` against this locally -- the `.env` `TEST_PAYER_PRIVATE_KEY` isn't
+   a valid key in this environment (too short to be real). Verified instead via the full test
+   suite (126/126 passing, including new tests for every changed behavior above) and manual
+   `curl` checks of the fast-ack mechanics. Whoever has a funded Base Sepolia test key should
+   run `bun run pay-test` for a genuine end-to-end money-moves check before trusting this
+   fully, and `pay-test.ts` has been updated to assert the new contract (measures the gap
+   between the ack and the balance actually dropping, then polls `page_url` up to 120s for
+   the render to finish).
+
+Resolves the "Open items" bullet below about PayBox's timeout vs our synchronous render --
+replaced with the narrower unknowns above.
 
 ## Background music (`src/music.ts`)
 ElevenLabs' music-generation API also turned out to be paid-plan-only (402, confirmed by
@@ -384,6 +486,7 @@ endpoint, a blocked CORS preflight — see below — or PayBox rejected the prop
   files were wiped by redeploys before the disk was attached.
 - Spec §6 / §6.3 / §6.4 wording: still not in the repo. Check response shape, error codes
   and the payment description against it.
-- PayBox's request timeout vs our synchronous ~25s+ render: unknown, so confirm on the first
-  E2E. If it times out, the video is still rendered (and visible at `/d/<id>`), but the
-  caller isn't charged (see the disconnect guard below).
+- ~~PayBox's request timeout vs our synchronous ~25s+ render~~ Addressed (MON-45): `/drop` no
+  longer waits for the render at all, see "Decoupling settlement from the render" above.
+  Still open: PayBox's actual timeout value is unmeasured, and whether it accepts `202`
+  identically to `200` -- both need a live E2E to confirm.

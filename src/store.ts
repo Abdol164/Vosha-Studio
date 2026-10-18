@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {customAlphabet} from 'nanoid';
 import type {DropCopy, StatusDropProps} from '../remotion/types.js';
+import type {PhotoErrorCode} from './image.js';
 
 export const DROP_ID_PATTERN = /^drp_[A-Za-z0-9_-]{8}$/;
 
@@ -19,6 +20,10 @@ export function isDropId(id: string): boolean {
 
 export type DropStatus = 'rendering' | 'done' | 'failed';
 
+// Exposed externally via GET /d/:id's JSON response, so it's a closed set rather than
+// free-text (err.message/String(err)) -- raw exception detail stays in the logs only.
+export type DropErrorCode = PhotoErrorCode | 'queue_full' | 'render_failed' | 'internal_error';
+
 export interface DropRecord {
 	id: string;
 	status: DropStatus;
@@ -29,7 +34,7 @@ export interface DropRecord {
 	// File names inside the media dir, set once the render finishes.
 	video?: string;
 	poster?: string;
-	error?: string;
+	error?: DropErrorCode;
 }
 
 export function dataDir(): string {
