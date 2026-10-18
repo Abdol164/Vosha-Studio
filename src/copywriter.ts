@@ -83,7 +83,9 @@ export async function writeCopy(input: CopywriterInput): Promise<DropCopy> {
 		return deterministicFallback(input);
 	}
 	const model = process.env.ANTHROPIC_MODEL ?? 'claude-haiku-5-5';
-	const client = new Anthropic({apiKey});
+	// SDK defaults are a 10-minute timeout with 2 retries, which let one hung call stall a
+	// paid drop for 2+ minutes in production. Past this, the deterministic copy is fine.
+	const client = new Anthropic({apiKey, timeout: 12_000, maxRetries: 1});
 
 	for (let attempt = 0; attempt < 2; attempt++) {
 		try {

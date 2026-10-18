@@ -344,10 +344,11 @@ describe('GET /d/:id content negotiation', () => {
 	});
 });
 
-test('renderConcurrency defaults to 2 and clamps to 1..8', () => {
-	assert.equal(renderConcurrency(undefined), 2);
-	assert.equal(renderConcurrency('1'), 1);
-	assert.equal(renderConcurrency('64'), 8);
-	assert.equal(renderConcurrency('0'), 2);
-	assert.equal(renderConcurrency('abc'), 2);
+test('renderConcurrency never exceeds the cores Remotion can see', () => {
+	assert.equal(renderConcurrency(undefined, 1), 1);
+	assert.equal(renderConcurrency(undefined, 8), 2);
+	assert.equal(renderConcurrency('4', 2), 2);
+	assert.equal(renderConcurrency('64', 32), 8);
+	assert.equal(renderConcurrency('0', 4), 2);
+	assert.equal(renderConcurrency('abc', 0), 1);
 });

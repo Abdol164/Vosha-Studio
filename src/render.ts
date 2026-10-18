@@ -1,5 +1,6 @@
 import {existsSync} from 'node:fs';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import {bundle} from '@remotion/bundler';
 import {ensureBrowser, renderMedia, renderStill, selectComposition} from '@remotion/renderer';
@@ -15,9 +16,13 @@ export interface RenderResult {
 	poster: string;
 }
 
-export function renderConcurrency(raw = process.env.RENDER_CONCURRENCY): number {
+// Remotion's default is half the visible cores, and it throws if asked for more cores than
+// exist: a default of 2 on Brimble's 1-core instance failed every render ("Maximum for
+// --concurrency is 1"), after payment had already settled.
+export function renderConcurrency(raw = process.env.RENDER_CONCURRENCY, cores = os.cpus().length): number {
 	const n = Number.parseInt(raw ?? '', 10);
-	return Number.isFinite(n) && n >= 1 ? Math.min(n, 8) : 2;
+	const wanted = Number.isFinite(n) && n >= 1 ? n : 2;
+	return Math.max(1, Math.min(wanted, cores, 8));
 }
 
 export type RenderFn = (id: string, props: StatusDropProps) => Promise<RenderResult>;
