@@ -24,7 +24,8 @@ export type RenderFn = (id: string, props: StatusDropProps) => Promise<RenderRes
 
 // Bundling takes seconds, so it happens once and every render reuses it. The Docker image
 // prebuilds it (REMOTION_BUNDLE_DIR) because webpack peaks around 650 MB, which OOM-killed
-// a 512 MB Brimble instance at boot.
+// Brimble's original, too-small instance at boot (see NOTES.md's Brimble deploy section for
+// the instance's actual size over time -- don't hardcode a number here, it'll go stale).
 export async function createRenderer(): Promise<RenderFn> {
 	// Otherwise Remotion downloads Chrome lazily on the first render, and a failed download
 	// there escapes as an uncaught rejection that kills the process mid-request.

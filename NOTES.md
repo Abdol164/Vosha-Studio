@@ -354,6 +354,12 @@ Deployed from Tanta's fork (`tantasui/Vosha-Studio`, `main`) with the Dockerfile
   and the instance capped the Node heap near 256 MB. The Dockerfile now prebuilds the bundle
   (`remotion bundle` → `/app/build`, `REMOTION_BUNDLE_DIR`), so boot takes about 130 MB. A
   render still peaks around 700 MB, so the instance needs **≥ 1 GB RAM (2 GB recommended)**.
+- Actual instance size: 1.5 GB, confirmed 2026-10-18 — small enough that Remotion's default
+  parallel rendering (one Chrome context per CPU core it sees, not per what the container is
+  actually given) plausibly caused memory thrashing rather than genuine speedup; see
+  `RENDER_CONCURRENCY` below. Bumped to **3 GB** the same day. Worth trying a higher
+  `RENDER_CONCURRENCY` (env var, no redeploy needed) now that there's real headroom — watch
+  `startup.listening`'s `memoryLimitMb`/`cpusSeen` and `drop.render_done` timings to judge it.
 
 ## Logs (`src/log.ts`)
 One JSON line per event, and every line for a request carries the same `req` id. Set
