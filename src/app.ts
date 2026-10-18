@@ -98,6 +98,24 @@ export function createApp(deps: AppDeps) {
 		next();
 	});
 
+	// PayBox's wallet/signing step likely runs in the caller's browser, and a JSON POST is a
+	// non-simple request, so the browser sends a CORS preflight (OPTIONS) before the real one.
+	// Express never answers OPTIONS on its own -- without this, the preflight 404s with no
+	// CORS headers, the browser blocks the actual request client-side, and nothing ever
+	// reaches us: no discovery probe, no payment, no render. Looks exactly like a dead widget.
+	app.use((req, res, next) => {
+		res.set('Access-Control-Allow-Origin', '*');
+		res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+		res.set('Access-Control-Allow-Headers', 'Content-Type, Payment-Signature, X-Payment');
+		// Custom response headers are invisible to cross-origin JS unless explicitly exposed.
+		res.set('Access-Control-Expose-Headers', 'Payment-Required, Payment-Response');
+		if (req.method === 'OPTIONS') {
+			res.status(204).end();
+			return;
+		}
+		next();
+	});
+
 	// Spec §11: CSP restricting media (and everything else) to same-origin. page.ts's
 	// <style>/<script> blocks are static (no user/LLM data interpolated into them — only
 	// into escaped text/attributes), so 'unsafe-inline' here doesn't reopen an XSS hole.

@@ -304,6 +304,36 @@ account: first call now fails in exactly 5s (not whatever the old retry storm to
 every call after that during the cooldown returns in 0ms. **This needs a Brimble
 redeploy to actually fix the live incident** — it's only fixed in the repo until then.
 
+### Missing CORS on `/drop`: a payment widget that never renders
+Found while investigating a report that PayBox's payment widget wasn't appearing at all —
+before our server could possibly have started generation. `generate_status_drop` builds its
+`io.paybox/transactionProposal` entirely locally (`plugin/src/paybox.ts`'s `proposeX402`), so
+the widget itself needs no network call to us; but PayBox's wallet/signing step almost
+certainly does hit `/drop` from the caller's browser to read the real x402 challenge
+(`payTo`, EIP-712 domain) before it can render anything meaningful. A JSON POST is a
+non-simple cross-origin request, so the browser sends a CORS preflight (`OPTIONS /drop`)
+first. Confirmed live: that preflight 404'd with **no CORS headers at all** (Express never
+answers OPTIONS on its own, and we never added a CORS layer) — the browser would block the
+real request before it ever left, which looks exactly like a dead widget and leaves zero
+trace in our logs (no `drop.no_body`, no `x402.challenge`, nothing — see the "no `/drop`
+line" case above).
+
+Compared against `tanta/keept`'s pattern: his tools (`propose_create_escrow_*`, etc.) build a
+complete, ready-to-sign EVM transaction (`to`/`value`/`data`) entirely from local ABI
+encoding — zero network calls, so this class of bug structurally can't happen there. Our
+`proposeX402` proposal is deliberately thinner (just `url`/`method`/`body` + an upper-bound
+`maxAmount`, no `payTo`), which is why it depends on a live round trip to us that the EVM
+proposals never need.
+
+Fixed in `src/app.ts`: a CORS middleware mounted before the CSP header, answering `OPTIONS`
+with 204 + `Access-Control-Allow-Origin: *`, and setting `Access-Control-Expose-Headers:
+Payment-Required, Payment-Response` on every response (those two custom headers are
+otherwise invisible to cross-origin JS even once the request itself is allowed through).
+Verified locally: preflight now returns 204 with the right headers, and the 402 response
+carries them too. **Needs a Brimble redeploy to take effect live** — this is a hypothesis
+backed by a verified gap (prod literally had no CORS headers), not a confirmed fix, since
+PayBox's exact client-side behavior isn't ours to inspect.
+
 ## Background music (`src/music.ts`)
 ElevenLabs' music-generation API also turned out to be paid-plan-only (402, confirmed by
 testing — same wall as the library voices). No browser automation available in this
@@ -335,7 +365,7 @@ the validated body. To debug PayBox, search for `"path":"/drop"` and read in ord
 - `drop.*` steps with `ms` timings → `drop.done` → `x402.settle` (`transaction` = tx hash)
 - `x402.settlement_canceled` (`reason`, `responseStatus`) → we answered >= 400, payer not charged
 If no `/drop` line appears at all, the request never reached us (portal network host, plugin
-endpoint, or PayBox rejected the proposal before calling).
+endpoint, a blocked CORS preflight — see below — or PayBox rejected the proposal before calling).
 
 ## Open items
 - PayBox developer portal submission requirements: TBD once account is registered (Track 1).
