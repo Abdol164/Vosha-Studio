@@ -9,6 +9,7 @@ import type {DropCopy} from '../remotion/types.js';
 import {type AppDeps, createApp} from '../src/app.js';
 import {PhotoError} from '../src/image.js';
 import {RenderQueue} from '../src/queue.js';
+import {renderConcurrency} from '../src/render.js';
 import {ensureDataDirs, getDrop, mediaDir} from '../src/store.js';
 
 const COPY: DropCopy = {
@@ -274,4 +275,12 @@ describe('POST /drop flow', () => {
 		assert.equal(res.headers.get('retry-after'), '60');
 		assert.equal(fetched, false);
 	});
+});
+
+test('renderConcurrency defaults to 2 and clamps to 1..8', () => {
+	assert.equal(renderConcurrency(undefined), 2);
+	assert.equal(renderConcurrency('1'), 1);
+	assert.equal(renderConcurrency('64'), 8);
+	assert.equal(renderConcurrency('0'), 2);
+	assert.equal(renderConcurrency('abc'), 2);
 });

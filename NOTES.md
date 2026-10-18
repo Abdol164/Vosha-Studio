@@ -339,7 +339,12 @@ endpoint, or PayBox rejected the proposal before calling).
 
 ## Open items
 - PayBox developer portal submission requirements: TBD once account is registered (Track 1).
-- Mainnet drop transaction hash: TBD after Phase 5 (MON-44, joint run via PayBox from Claude.ai).
+- ~~Mainnet drop transaction hash~~ Done (MON-44): first paid drop with persistent storage,
+  2026-10-17 23:31 UTC, PayBox wallet `0x99f8545d6358049A7e564A7E9777d4cb1A6CFC46` →
+  payout `0x1AAa…D4f1`, 0.25 USDC on Base, tx
+  `0x9cfde3ced7e048b938ff45ff5f313208b8fa75750ad051967a02f1013e778d81`, drop
+  `drp_up6BYKNM` (template market, 61s render). 8 earlier paid drops settled too, but their
+  files were wiped by redeploys before the disk was attached.
 - Spec §6 / §6.3 / §6.4 wording: still not in the repo. Check response shape, error codes
   and the payment description against it.
 - PayBox's request timeout vs our synchronous ~25s+ render: unknown, so confirm on the first

@@ -1,12 +1,13 @@
 // First: loads .env before any module reads process.env (queue.ts does at import).
 import './env.js';
+import os from 'node:os';
 import {createApp} from './app.js';
 import {backgroundRemovalEnabled, removeProductBackground} from './background-removal.js';
 import {writeCopy} from './copywriter.js';
 import {fetchPhoto} from './image.js';
 import {pickRandomTrack} from './music.js';
 import {renderQueue} from './queue.js';
-import {createRenderer} from './render.js';
+import {createRenderer, renderConcurrency} from './render.js';
 import {ensureDataDirs} from './store.js';
 import {logger} from './log.js';
 import {generateVoiceover} from './voiceover.js';
@@ -57,5 +58,9 @@ app.listen(port, () => {
 		voiceover: Boolean(process.env.ELEVENLABS_API_KEY),
 		copywriterLlm: Boolean(process.env.ANTHROPIC_API_KEY),
 		maxConcurrentRenders: renderQueue.concurrency,
+		renderConcurrency: renderConcurrency(),
+		cpusSeen: os.cpus().length,
+		// constrainedMemory() is the container (cgroup) limit; totalmem() would be the host.
+		memoryLimitMb: Math.round((process.constrainedMemory() || os.totalmem()) / 1e6),
 	});
 });
